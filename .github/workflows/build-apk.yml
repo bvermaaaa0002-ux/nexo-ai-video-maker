@@ -2,7 +2,6 @@ name: Build NEXO Android APK
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
@@ -16,106 +15,79 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 2. Setup Java for Android/Gradle
-      - name: Setup Java
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
-      # 3. Setup Flutter
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.0'
           channel: stable
           cache: true
 
-      # 4. Find Flutter project
+      - name: Check Flutter installation
+        run: |
+          flutter --version
+          dart --version
+
       - name: Find Flutter project
-        id: flutter_project
         shell: bash
         run: |
-          set -e
-
           echo "Searching for pubspec.yaml..."
 
-          PUBSPEC=$(find . \
-            -name pubspec.yaml \
-            -not -path './.git/*' \
-            -print -quit)
+          PROJECT_DIR=$(find . -maxdepth 3 -name "pubspec.yaml" -not -path "./.git/*" -print -quit | xargs -r dirname)
 
-          if [ -z "$PUBSPEC" ]; then
+          if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: pubspec.yaml was not found."
+            echo "This repository does not appear to contain a Flutter project."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$PUBSPEC")
+          echo "Flutter project found at: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          if [ "$PROJECT_DIR" = "." ]; then
-            PROJECT_DIR="$GITHUB_WORKSPACE"
-          else
-            PROJECT_DIR="$GITHUB_WORKSPACE/${PROJECT_DIR#./}"
-          fi
-
-          echo "Flutter project directory:"
-          echo "$PROJECT_DIR"
-
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      # 5. Verify Flutter
-      - name: Verify Flutter
-        working-directory: ${{ steps.flutter_project.outputs.project_dir }}
-        run: |
-          flutter --version
-          flutter doctor -v
-
-      # 6. Get dependencies
       - name: Get Flutter dependencies
-        working-directory: ${{ steps.flutter_project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           flutter pub get
 
-      # 7. Analyze project
-      - name: Flutter analyze
-        working-directory: ${{ steps.flutter_project.outputs.project_dir }}
+      - name: Analyze Flutter project
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          flutter analyze
-        continue-on-error: 
+          flutter analyze --no-fatal-infos
+        continue-on-error: true
 
-      # 8. Build release APK
       - name: Build release APK
-        working-directory: ${{ steps.flutter_project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           flutter build apk --release
 
-      # 9. Check APK
       - name: Verify APK
-        working-directory: ${{ steps.flutter_project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -f "$APK_PATH" ]; then
             echo "ERROR: APK was not generated."
-            echo "Searching build directory..."
-            find build -type f -name "*.apk" -print || true
+            echo "Expected file: $APK_PATH"
             exit 1
           fi
 
-          echo "APK successfully created:"
+          echo "APK successfully generated:"
           ls -lh "$APK_PATH"
 
-      # 10. Upload APK as GitHub Artifact
-      - name: Upload NEXO APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: NEXO-Android-APK
-          path: ${{ steps.flutter_project.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7

@@ -1,4 +1,4 @@
-name: Build NEXO Android APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -11,129 +11,71 @@ permissions:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build Release APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Java 17
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # 3. Setup Flutter
-      - name: Set up Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.35.0'
           cache: true
 
-      # 4. Check installed versions
-      - name: Check Flutter and Java
+      - name: Show Flutter version
         run: |
           flutter --version
-          dart --version
-          java -version
 
-      # 5. Find Flutter project
       - name: Find Flutter project
-        shell: bash
         run: |
-          echo "Searching for pubspec.yaml..."
+          test -f pubspec.yaml
+          echo "Flutter project found"
 
-          PROJECT_DIR="$(find . -maxdepth 5 -type f -name 'pubspec.yaml' \
-            -not -path './.git/*' \
-            -print -quit | xargs -r dirname)"
+      - name: Remove old Android project
+        run: |
+          rm -rf android
+          echo "Old Android project removed"
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: pubspec.yaml was not found."
-            echo ""
-            echo "Your repository must contain a Flutter project."
-            echo "Example:"
-            echo "  pubspec.yaml"
-            echo "  lib/"
-            echo "  android/"
-            exit 1
-          fi
+      - name: Generate fresh Android project
+        run: |
+          flutter create \
+            --platforms=android \
+            --org com.nexo \
+            --project-name nexo_ai_video_maker \
+            .
 
-          PROJECT_DIR="${PROJECT_DIR#./}"
-
-          echo "Flutter project found at: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      # 6. Check Flutter project structure
       - name: Check project structure
-        shell: bash
         run: |
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
+          test -f pubspec.yaml
+          test -d lib
+          test -d android
+          test -f android/settings.gradle
+          test -f android/app/build.gradle
+          echo "Flutter Android project structure is OK"
 
-          echo ""
-          echo "Project files:"
-          ls -la "$PROJECT_DIR"
-
-          if [ ! -d "$PROJECT_DIR/android" ]; then
-            echo "WARNING: android directory not found."
-            echo "Flutter may need to generate Android files."
-          fi
-
-      # 7. Get Flutter dependencies
       - name: Get Flutter dependencies
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           flutter pub get
 
-      # 8. Analyze Flutter project
       - name: Analyze Flutter project
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          flutter analyze --no-fatal-infos
-        continue-on-error: true
+          flutter analyze
 
-      # 9. Build release APK
       - name: Build release APK
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           flutter build apk --release
 
-      # 10. Find generated APK
       - name: Verify APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
-          echo "Searching for generated APK..."
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
-          APK_PATH="$(find build/app/outputs/flutter-apk \
-            -type f \
-            -name '*.apk' \
-            -print -quit)"
-
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK was not generated."
-            echo ""
-            echo "Build directory contents:"
-            find build -maxdepth 6 -type f 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "APK successfully generated:"
-          echo "$APK_PATH"
-
-          ls -lh "$APK_PATH"
-
-          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
-
-      # 11. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NEXO-Android-APK
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/*.apk
+          name: nexo-ai-video-maker-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          retention-days: 14
+          

@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Release APK
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Release APK
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -29,20 +29,24 @@ jobs:
           flutter --version
           dart --version
 
-      - name: Check repository
+      - name: Find Flutter project
         run: |
-          echo "Repository:"
+          echo "Current directory:"
           pwd
-          echo "Files:"
-          ls -la
+
+          echo "Repository files:"
+          find . -maxdepth 2 -type f | sort
 
       - name: Create Flutter project if needed
+        shell: bash
         run: |
-          if [ ! -f pubspec.yaml ]; then
-            echo "pubspec.yaml not found."
-            echo "Creating a fresh Flutter project..."
+          set -e
 
-            mkdir -p /tmp/nexo_flutter
+          if [ ! -f "./pubspec.yaml" ]; then
+            echo "pubspec.yaml not found."
+            echo "Creating fresh Flutter project..."
+
+            rm -rf /tmp/nexo_flutter
 
             flutter create \
               --platforms=android \
@@ -50,22 +54,44 @@ jobs:
               --project-name nexo_ai_video_maker \
               /tmp/nexo_flutter
 
-            cp -r /tmp/nexo_flutter/. .
+            echo "Flutter project created."
+
+            echo "Copying Flutter project into repository..."
+
+            cp -a /tmp/nexo_flutter/. .
+
+            echo "Files after copy:"
+            ls -la
           else
             echo "Flutter project already exists."
           fi
 
       - name: Verify Flutter project
+        shell: bash
         run: |
-          test -f pubspec.yaml
-          test -d lib
-          test -d android
+          set -e
 
-          echo "Flutter project:"
-          ls -la
+          echo "Checking Flutter project..."
+
+          if [ ! -f "./pubspec.yaml" ]; then
+            echo "ERROR: pubspec.yaml is missing"
+            exit 1
+          fi
+
+          if [ ! -d "./lib" ]; then
+            echo "ERROR: lib directory is missing"
+            exit 1
+          fi
+
+          if [ ! -d "./android" ]; then
+            echo "ERROR: android directory is missing"
+            exit 1
+          fi
+
+          echo "Flutter project structure is OK."
 
           echo "pubspec.yaml:"
-          cat pubspec.yaml
+          head -40 pubspec.yaml
 
       - name: Get Flutter dependencies
         run: |
@@ -80,13 +106,23 @@ jobs:
           flutter build apk --release
 
       - name: Verify APK
+        shell: bash
         run: |
-          test -f build/app/outputs/flutter-apk/app-release.apk
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          set -e
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
+
+          echo "APK successfully created:"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nexo-ai-video-maker-apk
+          name: nexo-ai-video-maker-release
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error

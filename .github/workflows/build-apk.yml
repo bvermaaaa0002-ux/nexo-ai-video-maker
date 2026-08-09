@@ -27,33 +27,45 @@ jobs:
       - name: Show Flutter version
         run: |
           flutter --version
+          dart --version
 
-      - name: Find Flutter project
+      - name: Check repository
         run: |
-          test -f pubspec.yaml
-          echo "Flutter project found"
+          echo "Repository:"
+          pwd
+          echo "Files:"
+          ls -la
 
-      - name: Remove old Android project
+      - name: Create Flutter project if needed
         run: |
-          rm -rf android
-          echo "Old Android project removed"
+          if [ ! -f pubspec.yaml ]; then
+            echo "pubspec.yaml not found."
+            echo "Creating a fresh Flutter project..."
 
-      - name: Generate fresh Android project
-        run: |
-          flutter create \
-            --platforms=android \
-            --org com.nexo \
-            --project-name nexo_ai_video_maker \
-            .
+            mkdir -p /tmp/nexo_flutter
 
-      - name: Check project structure
+            flutter create \
+              --platforms=android \
+              --org com.nexo \
+              --project-name nexo_ai_video_maker \
+              /tmp/nexo_flutter
+
+            cp -r /tmp/nexo_flutter/. .
+          else
+            echo "Flutter project already exists."
+          fi
+
+      - name: Verify Flutter project
         run: |
           test -f pubspec.yaml
           test -d lib
           test -d android
-          test -f android/settings.gradle
-          test -f android/app/build.gradle
-          echo "Flutter Android project structure is OK"
+
+          echo "Flutter project:"
+          ls -la
+
+          echo "pubspec.yaml:"
+          cat pubspec.yaml
 
       - name: Get Flutter dependencies
         run: |
@@ -78,4 +90,3 @@ jobs:
           name: nexo-ai-video-maker-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          

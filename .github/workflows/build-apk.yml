@@ -1,4 +1,3 @@
-
 name: Build NEXO Android APK
 
 on:
@@ -22,47 +21,21 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Create Android project
+      - name: Find Flutter project
         run: |
-          flutter create \
-            --platforms=android \
-            --project-name nexo_ai_video_maker \
-            build_app
+          echo "Searching for pubspec.yaml..."
+          find . -name pubspec.yaml -not -path './.git/*'
 
-      - name: Copy NEXO source
+      - name: Get dependencies
         run: |
-          cp flutter/pubspec.yaml build_app/pubspec.yaml
-          rm -rf build_app/lib
-          cp -R flutter/lib build_app/lib
+          flutter pub get
 
-      - name: Enable local HTTP
+      - name: Build APK
         run: |
-          python - <<'PY'
-          p = 'build_app/android/app/src/main/AndroidManifest.xml'
-          s = open(p).read()
-          s = s.replace(
-              '<application ',
-              '<application android:usesCleartextTraffic="true" ',
-              1
-          )
-          open(p, 'w').write(s)
-          PY
-
-      - name: Get Flutter packages
-        working-directory: build_app
-        run: flutter pub get
-
-      - name: Analyze Flutter project
-        working-directory: build_app
-        run: flutter analyze
-
-      - name: Build release APK
-        working-directory: build_app
-        run: flutter build apk --release
+          flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NEXO-release-APK
-          path: build_app/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+          name: NEXO-Android-APK
+          path: build/app/outputs/flutter-apk/app-release.apk

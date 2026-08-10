@@ -1,14 +1,11 @@
 import 'dart:io';
 import 'dart:math';
-
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
-import 'package:video_player/video_player.dart';
 import 'package:share_plus/share_plus.dart';
-
-import 'tts_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,80 +22,137 @@ class NexoApp extends StatelessWidget {
       title: 'NEXO AI',
       theme: ThemeData(
         brightness: Brightness.dark,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF090D12),
+        scaffoldBackgroundColor: const Color(0xFF0B0F14),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF7C4DFF),
           brightness: Brightness.dark,
         ),
+        useMaterial3: true,
       ),
-      home: const HomePage(),
+      home: const NexoHome(),
     );
   }
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class NexoHome extends StatefulWidget {
+  const NexoHome({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<NexoHome> createState() => _NexoHomeState();
 }
 
-class _HomePageState extends State<HomePage> {
-  final TextEditingController scriptController =
-      TextEditingController();
+class _NexoHomeState extends State<NexoHome> {
+  final TextEditingController scriptController = TextEditingController();
+  final FlutterTts flutterTts = FlutterTts();
 
   bool generating = false;
-  double progress = 0;
-
   String status = 'Ready to create your video';
-
   String? videoPath;
 
-  VideoPlayerController? videoController;
+  @override
+  void initState() {
+    super.initState();
+    _setupTts();
+  }
+
+  Future<void> _setupTts() async {
+    try {
+      await flutterTts.setLanguage('hi-IN');
+      await flutterTts.setSpeechRate(0.48);
+      await flutterTts.setPitch(1.0);
+      await flutterTts.setVolume(1.0);
+    } catch (_) {}
+  }
 
   @override
   void dispose() {
     scriptController.dispose();
-    videoController?.dispose();
+    flutterTts.stop();
     super.dispose();
   }
 
-  List<String> splitScript(String text) {
-    final cleaned = text
-        .replaceAll('\r\n', '\n')
-        .replaceAll('\r', '\n')
-        .trim();
+  Future<String> _createVoice(String text, Directory dir) async {
+    final audioPath =
+        '${dir.path}/nexo_voice_${DateTime.now().millisecondsSinceEpoch}.mp3';
 
-    if (cleaned.isEmpty) return [];
+    final result = await flutterTts.synthesizeToFile(
+      text,
+      audioPath,
+      true,
+    );
 
-    final paragraphs = cleaned
-        .split(RegExp(r'\n\s*\n'))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-
-    if (paragraphs.length > 1) {
-      return paragraphs;
+    if (result == null || result == false) {
+      throw Exception('Hindi voice could not be created.');
     }
 
-    final sentences = cleaned
-        .split(RegExp(r'(?<=[.!?।])\s+'))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    final file = File(audioPath);
 
-    final List<String> scenes = [];
-
-    for (int i = 0; i < sentences.length; i += 2) {
-      final end = min(i + 2, sentences.length);
-
-      scenes.add(
-        sentences.sublist(i, end).join(' '),
-      );
+    for (int i = 0; i < 20; i++) {
+      if (await file.exists()) {
+        final size = await file.length();
+        if (size > 1000) {
+          return audioPath;
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
     }
 
-    return scenes.isEmpty ? [cleaned] : scenes;
+    throw Exception('Voice file was not created by Android TTS.');
+  }
+
+  String _escapeForFfmpeg(String value) {
+    return value
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", r"\'")
+        .replaceAll(':', r'\:')
+        .replaceAll('[', r'\[')
+        .replaceAll(']', r'\]');
+  }
+
+  Future<String> _createVideo(
+    String audioPath,
+    String outputPath,
+    int duration,
+  ) async {
+    final safeOutput = _escapeForFfmpeg(outputPath);
+
+    final command = [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=0x0B0F14:s=720x1280:r=30',
+      '-i',
+      "'$audioPath'",
+      '-t',
+      duration.toString(),
+      '-map',
+      '0:v:0',
+      '-map',
+      '1:a:0',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'veryfast',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      '-shortest',
+      "'$safeOutput'",
+    ].join(' ');
+
+    final session = await FFmpegKit.execute(command);
+    final returnCode = await session.getReturnCode();
+
+    if (!ReturnCode.isSuccess(returnCode)) {
+      final logs = await session.getOutput();
+      throw Exception('FFmpeg video creation failed.\n$logs');
+    }
+
+    return outputPath;
   }
 
   Future<void> generateVideo() async {
@@ -115,302 +169,94 @@ class _HomePageState extends State<HomePage> {
 
     setState(() {
       generating = true;
-      progress = 0.02;
-      status = 'Script को scenes में बदला जा रहा है...';
       videoPath = null;
+      status = 'Hindi voice बनाई जा रही है...';
     });
 
     try {
-      final scenes = splitScript(script);
+      final directory = await getApplicationDocumentsDirectory();
 
-      if (scenes.isEmpty) {
-        throw Exception('Script खाली है।');
-      }
-
-      final tempDirectory = await getTemporaryDirectory();
-
-      final workDirectory = Directory(
-        '${tempDirectory.path}/nexo_video',
-      );
-
-      if (await workDirectory.exists()) {
-        await workDirectory.delete(recursive: true);
-      }
-
-      await workDirectory.create(recursive: true);
-
-      final List<String> sceneVideos = [];
-
-      for (int i = 0; i < scenes.length; i++) {
-        if (!mounted) return;
-
-        setState(() {
-          progress =
-              0.05 + ((i / scenes.length) * 0.70);
-          status =
-              'Scene ${i + 1}/${scenes.length}: voice तैयार हो रही है...';
-        });
-
-        final textFile = File(
-          '${workDirectory.path}/scene_$i.txt',
-        );
-
-        await textFile.writeAsString(
-          scenes[i],
-          flush: true,
-        );
-
-        final audioFile = File(
-          '${workDirectory.path}/voice_$i.wav',
-        );
-
-        await TtsService.synthesizeToFile(
-          text: scenes[i],
-          filePath: audioFile.path,
-          language: _detectLanguage(scenes[i]),
-        );
-
-        if (!await audioFile.exists()) {
-          throw Exception(
-            'Voice file नहीं बन पाई: Scene ${i + 1}',
-          );
-        }
-
-        final sceneVideo = File(
-          '${workDirectory.path}/scene_$i.mp4',
-        );
-
-        setState(() {
-          status =
-              'Scene ${i + 1}/${scenes.length}: video बन रहा है...';
-        });
-
-        final safeTextPath =
-            _escapeForFfmpeg(textFile.path);
-
-        final safeAudioPath =
-            _escapeForFfmpeg(audioFile.path);
-
-        final safeOutputPath =
-            _escapeForFfmpeg(sceneVideo.path);
-
-        final color = _sceneColor(i);
-
-        final command =
-            '-y '
-            '-f lavfi '
-            '-i "color=c=$color:s=720x1280:r=30" '
-            '-i "$safeAudioPath" '
-            '-vf "drawtext='
-            'fontfile=/system/fonts/Roboto-Regular.ttf:'
-            'textfile=$safeTextPath:'
-            'fontcolor=white:'
-            'fontsize=42:'
-            'line_spacing=12:'
-            'x=(w-text_w)/2:'
-            'y=(h-text_h)/2:'
-            'box=1:'
-            'boxcolor=black@0.35:'
-            'boxborderw=35:'
-            'borderw=2:'
-            'bordercolor=black@0.5'
-            '" '
-            '-c:v libx264 '
-            '-preset ultrafast '
-            '-pix_fmt yuv420p '
-            '-c:a aac '
-            '-b:a 128k '
-            '-shortest '
-            '"$safeOutputPath"';
-
-        final session = await FFmpegKit.execute(command);
-
-        final returnCode = await session.getReturnCode();
-
-        if (!ReturnCode.isSuccess(returnCode)) {
-          final logs = await session.getLogsAsString();
-
-          throw Exception(
-            'FFmpeg Scene ${i + 1} failed.\n$logs',
-          );
-        }
-
-        sceneVideos.add(sceneVideo.path);
-      }
-
-      setState(() {
-        progress = 0.80;
-        status = 'सभी scenes को एक video में जोड़ा जा रहा है...';
-      });
-
-      final concatFile = File(
-        '${workDirectory.path}/concat.txt',
-      );
-
-      final concatContent = sceneVideos
-          .map(
-            (path) =>
-                "file '${path.replaceAll("'", "'\\''")}'",
-          )
-          .join('\n');
-
-      await concatFile.writeAsString(
-        concatContent,
-        flush: true,
-      );
-
-      final documents =
-          await getApplicationDocumentsDirectory();
-
-      final outputDirectory = Directory(
-        '${documents.path}/NexoAI',
-      );
-
-      if (!await outputDirectory.exists()) {
-        await outputDirectory.create(
-          recursive: true,
-        );
-      }
-
-      final finalVideo = File(
-        '${outputDirectory.path}/NEXO_AI_${DateTime.now().millisecondsSinceEpoch}.mp4',
-      );
-
-      final concatPath =
-          _escapeForFfmpeg(concatFile.path);
-
-      final finalPath =
-          _escapeForFfmpeg(finalVideo.path);
-
-      final finalCommand =
-          '-y '
-          '-f concat '
-          '-safe 0 '
-          '-i "$concatPath" '
-          '-c copy '
-          '"$finalPath"';
-
-      setState(() {
-        status = 'Final MP4 तैयार हो रहा है...';
-        progress = 0.90;
-      });
-
-      final finalSession =
-          await FFmpegKit.execute(finalCommand);
-
-      final finalReturnCode =
-          await finalSession.getReturnCode();
-
-      if (!ReturnCode.isSuccess(finalReturnCode)) {
-        final logs =
-            await finalSession.getLogsAsString();
-
-        throw Exception(
-          'Final video बनाने में error आया.\n$logs',
-        );
-      }
-
-      if (!await finalVideo.exists()) {
-        throw Exception(
-          'MP4 file नहीं बनी।',
-        );
-      }
-
-      videoPath = finalVideo.path;
-
-      await videoController?.dispose();
-
-      videoController =
-          VideoPlayerController.file(finalVideo);
-
-      await videoController!.initialize();
+      final audioPath = await _createVoice(script, directory);
 
       if (!mounted) return;
 
       setState(() {
-        progress = 1.0;
-        generating = false;
-        status =
-            'Video successfully बन गया और Save हो गया!';
+        status = 'Voice तैयार है। Video बनाया जा रहा है...';
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            '🎉 आपका video तैयार है!',
-          ),
-        ),
+      final outputPath =
+          '${directory.path}/NEXO_AI_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      final durationSeconds = max(
+        3,
+        (script.length / 12).ceil(),
       );
+
+      await _createVideo(
+        audioPath,
+        outputPath,
+        durationSeconds,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        generating = false;
+        videoPath = outputPath;
+        status = 'Video successfully created!';
+      });
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
         generating = false;
-        status = 'Error: ${e.toString()}';
+        status = 'Error: $e';
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Video नहीं बन पाया:\n$e',
-          ),
-          duration:
-              const Duration(seconds: 6),
-        ),
-      );
     }
-  }
-
-  String _detectLanguage(String text) {
-    final hasHindi =
-        RegExp(r'[\u0900-\u097F]').hasMatch(text);
-
-    return hasHindi ? 'hi-IN' : 'en-US';
-  }
-
-  String _sceneColor(int index) {
-    const colors = [
-      '0x19113D',
-      '0x102A43',
-      '0x3B1F2B',
-      '0x12372A',
-      '0x352208',
-      '0x211F3A',
-    ];
-
-    return colors[index % colors.length];
-  }
-
-  String _escapeForFfmpeg(String value) {
-    return value
-        .replaceAll('\\', '/')
-        .replaceAll(':', '\\:')
-        .replaceAll("'", "\\'");
   }
 
   Future<void> shareVideo() async {
     if (videoPath == null) return;
 
+    final file = File(videoPath!);
+
+    if (!await file.exists()) {
+      setState(() {
+        status = 'Video file नहीं मिली।';
+      });
+      return;
+    }
+
     await SharePlus.instance.share(
       ShareParams(
+        files: [XFile(videoPath!)],
         text: 'Created with NEXO AI',
-        files: [
-          XFile(videoPath!),
-        ],
       ),
     );
   }
 
-  Future<void> playVideo() async {
-    if (videoController == null) return;
+  Future<void> previewVoice() async {
+    final text = scriptController.text.trim();
 
-    if (videoController!.value.isPlaying) {
-      await videoController!.pause();
-    } else {
-      await videoController!.play();
+    if (text.isEmpty) {
+      setState(() {
+        status = 'पहले script लिखें।';
+      });
+      return;
     }
 
-    setState(() {});
+    try {
+      await flutterTts.setLanguage('hi-IN');
+      await flutterTts.speak(text);
+
+      setState(() {
+        status = 'Hindi voice चल रही है...';
+      });
+    } catch (e) {
+      setState(() {
+        status = 'Voice error: $e';
+      });
+    }
   }
 
   @override
@@ -438,8 +284,7 @@ class _HomePageState extends State<HomePage> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
                 'AI Video Maker',
@@ -452,10 +297,10 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 8),
 
               Text(
-                'Script डालें और voice के साथ MP4 video बनाएं.',
+                'Script → Hindi Voice → MP4 Video',
                 style: TextStyle(
-                  color: Colors.grey.shade400,
                   fontSize: 16,
+                  color: Colors.grey.shade400,
                 ),
               ),
 
@@ -465,12 +310,10 @@ class _HomePageState extends State<HomePage> {
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
                   color: const Color(0xFF151B23),
-                  borderRadius:
-                      BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Row(
                       children: [
@@ -483,8 +326,7 @@ class _HomePageState extends State<HomePage> {
                           'Your Script',
                           style: TextStyle(
                             fontSize: 18,
-                            fontWeight:
-                                FontWeight.bold,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
@@ -493,96 +335,60 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(height: 15),
 
                     TextField(
-                      controller:
-                          scriptController,
+                      controller: scriptController,
                       minLines: 10,
                       maxLines: 18,
-                      decoration:
-                          InputDecoration(
+                      decoration: InputDecoration(
                         hintText:
-                            'अपनी पूरी script यहाँ लिखें या paste करें...',
+                            'अपनी Hindi script यहाँ लिखें या paste करें...',
                         filled: true,
-                        fillColor:
-                            const Color(0xFF0D1218),
-                        border:
-                            OutlineInputBorder(
-                          borderRadius:
-                              BorderRadius.circular(
-                                  15),
-                          borderSide:
-                              BorderSide.none,
+                        fillColor: const Color(0xFF0D1218),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(15),
+                          borderSide: BorderSide.none,
                         ),
                       ),
                     ),
 
-                    const SizedBox(height: 18),
-
-                    if (generating)
-                      Column(
-                        children: [
-                          LinearProgressIndicator(
-                            value: progress,
-                            color:
-                                const Color(
-                              0xFF7C4DFF,
-                            ),
-                          ),
-                          const SizedBox(
-                            height: 10,
-                          ),
-                          Text(
-                            '${(progress * 100).toInt()}%',
-                            style:
-                                const TextStyle(
-                              fontWeight:
-                                  FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(
-                            height: 15,
-                          ),
-                        ],
-                      ),
+                    const SizedBox(height: 15),
 
                     SizedBox(
                       width: double.infinity,
-                      height: 55,
-                      child:
-                          ElevatedButton.icon(
-                        onPressed: generating
-                            ? null
-                            : generateVideo,
+                      height: 50,
+                      child: OutlinedButton.icon(
+                        onPressed: generating ? null : previewVoice,
+                        icon: const Icon(Icons.volume_up),
+                        label: const Text('Test Hindi Voice'),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 58,
+                      child: ElevatedButton.icon(
+                        onPressed: generating ? null : generateVideo,
                         icon: generating
                             ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child:
-                                    CircularProgressIndicator(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
                                   strokeWidth: 2,
+                                  color: Colors.white,
                                 ),
                               )
-                            : const Icon(
-                                Icons
-                                    .movie_creation,
-                              ),
+                            : const Icon(Icons.movie_creation),
                         label: Text(
                           generating
-                              ? 'Video बन रहा है...'
+                              ? 'Creating Video...'
                               : 'Create Video',
                         ),
-                        style:
-                            ElevatedButton.styleFrom(
-                          backgroundColor:
-                              const Color(
-                            0xFF7C4DFF,
-                          ),
-                          foregroundColor:
-                              Colors.white,
-                          shape:
-                              RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(
-                                    15),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF7C4DFF),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15),
                           ),
                         ),
                       ),
@@ -595,28 +401,31 @@ class _HomePageState extends State<HomePage> {
 
               Container(
                 width: double.infinity,
-                padding:
-                    const EdgeInsets.all(18),
+                padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
-                  color:
-                      const Color(0xFF151B23),
-                  borderRadius:
-                      BorderRadius.circular(18),
+                  color: const Color(0xFF151B23),
+                  borderRadius: BorderRadius.circular(18),
                 ),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.info_outline,
-                      color:
-                          Color(0xFF9C7BFF),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF7C4DFF).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.movie_creation_outlined,
+                        color: Color(0xFF9C7BFF),
+                      ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 15),
                     Expanded(
                       child: Text(
                         status,
                         style: TextStyle(
-                          color:
-                              Colors.grey.shade300,
+                          color: Colors.grey.shade300,
+                          fontSize: 15,
                         ),
                       ),
                     ),
@@ -624,80 +433,140 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              if (videoController != null &&
-                  videoController!
-                      .value
-                      .isInitialized) ...[
-                const SizedBox(height: 25),
+              if (videoPath != null) ...[
+                const SizedBox(height: 20),
 
-                const Text(
-                  'Video Preview',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight:
-                        FontWeight.bold,
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151B23),
+                    borderRadius: BorderRadius.circular(18),
                   ),
-                ),
-
-                const SizedBox(height: 12),
-
-                ClipRRect(
-                  borderRadius:
-                      BorderRadius.circular(18),
-                  child: AspectRatio(
-                    aspectRatio:
-                        videoController!
-                            .value
-                            .aspectRatio,
-                    child: VideoPlayer(
-                      videoController!,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: playVideo,
-                        icon: Icon(
-                          videoController!
-                                  .value
-                                  .isPlaying
-                              ? Icons.pause
-                              : Icons.play_arrow,
-                        ),
-                        label: Text(
-                          videoController!
-                                  .value
-                                  .isPlaying
-                              ? 'Pause'
-                              : 'Play',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '🎬 Video Ready',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ),
-
-                    const SizedBox(width: 10),
-
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: shareVideo,
-                        icon: const Icon(
-                          Icons.share,
-                        ),
-                        label: const Text(
-                          'Save / Share',
+                      const SizedBox(height: 8),
+                      const Text(
+                        'आपका MP4 video तैयार है।',
+                      ),
+                      const SizedBox(height: 15),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: ElevatedButton.icon(
+                          onPressed: shareVideo,
+                          icon: const Icon(Icons.share),
+                          label: const Text('Save / Share Video'),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
+
+              const SizedBox(height: 25),
+
+              const Text(
+                'Features',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              const FeatureCard(
+                icon: Icons.text_fields,
+                title: 'Script to Video',
+                description: 'आपकी script से video project बनता है।',
+              ),
+
+              const FeatureCard(
+                icon: Icons.volume_up,
+                title: 'Hindi Voice',
+                description: 'Android की Hindi TTS voice इस्तेमाल होती है।',
+              ),
+
+              const FeatureCard(
+                icon: Icons.movie,
+                title: 'MP4 Export',
+                description: 'Video MP4 format में तैयार होता है।',
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class FeatureCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String description;
+
+  const FeatureCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151B23),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(11),
+            decoration: BoxDecoration(
+              color: const Color(0xFF7C4DFF).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              icon,
+              color: const Color(0xFF9C7BFF),
+            ),
+          ),
+          const SizedBox(width: 15),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  description,
+                  style: TextStyle(
+                    color: Colors.grey.shade500,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

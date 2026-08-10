@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build NEXO AI APK
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +21,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Show Flutter and Dart version
+      - name: Check Flutter
         run: |
           flutter --version
           dart --version
@@ -30,68 +30,34 @@ jobs:
         run: |
           test -f pubspec.yaml
           test -d lib
-          echo "Flutter project found successfully."
+          test -f lib/main.dart
+          echo "Flutter project OK"
 
-      - name: Create Android project if missing
+      - name: Create Android project
         run: |
           if [ ! -d "android" ]; then
-            echo "Android folder is missing."
-            flutter create --platforms=android .
+            flutter create --platforms=android --project-name nexo_ai .
           else
-            echo "Android folder already exists."
+            echo "Android project already exists"
           fi
 
-      - name: Remove generated test
-        run: |
-          rm -f test/widget_test.dart
-          echo "Generated widget test removed."
-
-      - name: Verify Android project
-        run: |
-          test -d android
-
-          if [ -f android/settings.gradle ]; then
-            echo "Found android/settings.gradle"
-          elif [ -f android/settings.gradle.kts ]; then
-            echo "Found android/settings.gradle.kts"
-          else
-            echo "ERROR: Android settings file is missing."
-            exit 1
-          fi
-
-          if [ -f android/app/build.gradle ]; then
-            echo "Found android/app/build.gradle"
-          elif [ -f android/app/build.gradle.kts ]; then
-            echo "Found android/app/build.gradle.kts"
-          else
-            echo "ERROR: Android app build file is missing."
-            exit 1
-          fi
-
-          echo "Android project verified successfully."
-
-      - name: Get Flutter dependencies
+      - name: Get dependencies
         run: |
           flutter clean
           flutter pub get
 
-      - name: Analyze Flutter project
+      - name: Analyze project
         run: |
-          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter analyze --no-fatal-infos
 
       - name: Build release APK
         run: |
           flutter build apk --release
 
-      - name: Verify APK
+      - name: Check APK
         run: |
-          if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            echo "APK created successfully."
-            ls -lh build/app/outputs/flutter-apk/app-release.apk
-          else
-            echo "ERROR: APK was not created."
-            exit 1
-          fi
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

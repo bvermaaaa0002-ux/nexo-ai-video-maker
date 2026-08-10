@@ -30,12 +30,12 @@ jobs:
         run: |
           test -f pubspec.yaml
           test -d lib
-          echo "Flutter project found."
+          echo "Flutter project found successfully."
 
       - name: Create Android project if missing
         run: |
           if [ ! -d "android" ]; then
-            echo "Android folder missing. Creating Android project..."
+            echo "Android folder is missing."
             flutter create --platforms=android .
           else
             echo "Android folder already exists."
@@ -44,14 +44,31 @@ jobs:
       - name: Remove generated test
         run: |
           rm -f test/widget_test.dart
-          echo "Old widget test removed."
+          echo "Generated widget test removed."
 
       - name: Verify Android project
         run: |
           test -d android
-          test -f android/settings.gradle
-          test -f android/app/build.gradle
-          echo "Android project verified."
+
+          if [ -f android/settings.gradle ]; then
+            echo "Found android/settings.gradle"
+          elif [ -f android/settings.gradle.kts ]; then
+            echo "Found android/settings.gradle.kts"
+          else
+            echo "ERROR: Android settings file is missing."
+            exit 1
+          fi
+
+          if [ -f android/app/build.gradle ]; then
+            echo "Found android/app/build.gradle"
+          elif [ -f android/app/build.gradle.kts ]; then
+            echo "Found android/app/build.gradle.kts"
+          else
+            echo "ERROR: Android app build file is missing."
+            exit 1
+          fi
+
+          echo "Android project verified successfully."
 
       - name: Get Flutter dependencies
         run: |
@@ -68,12 +85,17 @@ jobs:
 
       - name: Verify APK
         run: |
-          test -f build/app/outputs/flutter-apk/app-release.apk
-          echo "APK successfully created."
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            echo "APK created successfully."
+            ls -lh build/app/outputs/flutter-apk/app-release.apk
+          else
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: NEXO-AI-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error

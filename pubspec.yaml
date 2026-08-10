@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
 
+  cupertino_icons: ^1.0.8
   flutter_tts: ^4.2.5
   path_provider: ^2.1.5
   ffmpeg_kit_flutter_new: ^3.2.0
@@ -20,6 +21,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
   flutter_lints: ^5.0.0
 
 flutter:

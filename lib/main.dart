@@ -1,9 +1,11 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:video_player/video_player.dart';
 import 'package:share_plus/share_plus.dart';
@@ -66,6 +68,10 @@ class _NexoHomeState extends State<NexoHome> {
     super.dispose();
   }
 
+  // ------------------------------------------------------------
+  // DIRECTORY
+  // ------------------------------------------------------------
+
   Future<Directory> _getWorkDirectory() async {
     final base = await getApplicationDocumentsDirectory();
 
@@ -80,9 +86,65 @@ class _NexoHomeState extends State<NexoHome> {
     return dir;
   }
 
-  // ---------------------------------------------------------
-  // HINDI TTS TEST
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // HINDI TTS
+  // ------------------------------------------------------------
+
+  Future<String> _createHindiVoice(String text) async {
+    final dir = await _getWorkDirectory();
+
+    final voiceFile = File(
+      '${dir.path}/nexo_voice_${DateTime.now().millisecondsSinceEpoch}.wav',
+    );
+
+    if (await voiceFile.exists()) {
+      await voiceFile.delete();
+    }
+
+    _setStatus('Hindi voice बनाई जा रही है...');
+
+    await _tts.stop();
+
+    await _tts.setLanguage('hi-IN');
+    await _tts.setSpeechRate(0.48);
+    await _tts.setVolume(1.0);
+    await _tts.setPitch(1.0);
+
+    final result = await _tts.synthesizeToFile(
+      text,
+      voiceFile.path,
+      true,
+    );
+
+    if (result != 1) {
+      throw Exception(
+        'Hindi TTS voice file नहीं बन पाई।',
+      );
+    }
+
+    for (int i = 0; i < 40; i++) {
+      await Future.delayed(
+        const Duration(milliseconds: 300),
+      );
+
+      if (await voiceFile.exists()) {
+        final size = await voiceFile.length();
+
+        if (size > 1000) {
+          return voiceFile.path;
+        }
+      }
+    }
+
+    throw Exception(
+      'Voice file create नहीं हुई। '
+      'कृपया फोन में Hindi TTS voice installed है या नहीं देखें।',
+    );
+  }
+
+  // ------------------------------------------------------------
+  // TEST VOICE
+  // ------------------------------------------------------------
 
   Future<void> _testHindiVoice() async {
     final text = _scriptController.text.trim();
@@ -108,143 +170,258 @@ class _NexoHomeState extends State<NexoHome> {
     }
   }
 
-  // ---------------------------------------------------------
-  // CREATE HINDI VOICE FILE
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // IMAGE URLS
+  //
+  // These are public Unsplash images.
+  // They are downloaded to the phone first.
+  // ------------------------------------------------------------
 
-  Future<String> _createHindiVoice(String text) async {
-    final dir = await _getWorkDirectory();
+  final List<String> _schoolImages = [
+    'https://images.unsplash.com/photo-1580582932707-520aed937b7b?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1509062522246-3755977927d7?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+  ];
 
-    final voiceFile = File(
-      '${dir.path}/nexo_voice_${DateTime.now().millisecondsSinceEpoch}.wav',
+  final List<String> _loveImages = [
+    'https://images.unsplash.com/photo-1518199266791-5375a83190b7?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+  ];
+
+  final List<String> _mysteryImages = [
+    'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+  ];
+
+  final List<String> _generalImages = [
+    'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+    'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=1280&h=720&q=80&fm=jpg',
+  ];
+
+  // ------------------------------------------------------------
+  // CHOOSE IMAGE CATEGORY
+  // ------------------------------------------------------------
+
+  List<String> _getImageUrls(String text) {
+    final lower = text.toLowerCase();
+
+    if (lower.contains('school') ||
+        lower.contains('स्कूल') ||
+        lower.contains('class') ||
+        lower.contains('क्लास') ||
+        lower.contains('teacher') ||
+        lower.contains('टीचर') ||
+        lower.contains('student') ||
+        lower.contains('स्टूडेंट')) {
+      return _schoolImages;
+    }
+
+    if (lower.contains('love') ||
+        lower.contains('प्यार') ||
+        lower.contains('प्रेम') ||
+        lower.contains('दिल') ||
+        lower.contains('मोहब्बत') ||
+        lower.contains('romantic')) {
+      return _loveImages;
+    }
+
+    if (lower.contains('mystery') ||
+        lower.contains('रहस्य') ||
+        lower.contains('राज') ||
+        lower.contains('भूत') ||
+        lower.contains('dark') ||
+        lower.contains('डरावना')) {
+      return _mysteryImages;
+    }
+
+    return _generalImages;
+  }
+
+  // ------------------------------------------------------------
+  // DOWNLOAD IMAGE
+  // ------------------------------------------------------------
+
+  Future<File> _downloadImage(
+    String url,
+    Directory dir,
+    int index,
+  ) async {
+    final imageFile = File(
+      '${dir.path}/scene_$index.jpg',
     );
 
-    if (await voiceFile.exists()) {
-      await voiceFile.delete();
-    }
-
-    if (mounted) {
-      setState(() {
-        _status = 'Hindi voice बनाई जा रही है...';
-      });
-    }
-
-    await _tts.stop();
-
-    await _tts.setLanguage('hi-IN');
-    await _tts.setSpeechRate(0.48);
-    await _tts.setVolume(1.0);
-    await _tts.setPitch(1.0);
-
-    // Important:
-    // Wait for synthesis to finish before FFmpeg reads the file.
     try {
-      await _tts.awaitSynthCompletion(true);
-    } catch (_) {
-      // Some flutter_tts versions may not support this properly.
-    }
-
-    final result = await _tts.synthesizeToFile(
-      text,
-      voiceFile.path,
-      true,
-    );
-
-    if (result != 1) {
-      throw Exception(
-        'Hindi TTS voice file नहीं बन सकी।',
-      );
-    }
-
-    // Wait until the file exists and its size becomes stable.
-    int previousSize = -1;
-    int stableCount = 0;
-
-    for (int i = 0; i < 40; i++) {
-      await Future.delayed(
-        const Duration(milliseconds: 500),
+      _setStatus(
+        'Picture $index डाउनलोड हो रही है...',
       );
 
-      if (!await voiceFile.exists()) {
-        continue;
+      final client = HttpClient();
+
+      client.connectionTimeout =
+          const Duration(seconds: 15);
+
+      final request = await client.getUrl(
+        Uri.parse(url),
+      );
+
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'NEXO-AI/1.0',
+      );
+
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        client.close(force: true);
+
+        throw Exception(
+          'Image download failed: ${response.statusCode}',
+        );
       }
 
-      final size = await voiceFile.length();
+      final bytes = await response.fold<List<int>>(
+        <int>[],
+        (previous, element) {
+          previous.addAll(element);
+          return previous;
+        },
+      );
 
-      if (size > 1000 && size == previousSize) {
-        stableCount++;
+      client.close(force: true);
 
-        if (stableCount >= 3) {
-          break;
-        }
-      } else {
-        stableCount = 0;
+      if (bytes.length < 1000) {
+        throw Exception(
+          'Downloaded image बहुत छोटी है।',
+        );
       }
 
-      previousSize = size;
-    }
+      await imageFile.writeAsBytes(
+        bytes,
+        flush: true,
+      );
 
-    if (!await voiceFile.exists()) {
-      throw Exception(
-        'Voice file create नहीं हुई।',
+      return imageFile;
+    } catch (e) {
+      // Internet image fail होने पर
+      // fallback picture बनाते हैं।
+      return _createFallbackImage(
+        dir,
+        index,
       );
     }
-
-    final fileSize = await voiceFile.length();
-
-    if (fileSize < 1000) {
-      throw Exception(
-        'Hindi voice file बहुत छोटी है। फोन में Hindi TTS voice check करें।',
-      );
-    }
-
-    // Check WAV header.
-    final bytes = await voiceFile.openRead(0, 12).fold<List<int>>(
-      [],
-      (previous, element) => previous..addAll(element),
-    );
-
-    if (bytes.length < 12) {
-      throw Exception(
-        'Voice WAV file अधूरी बनी है।',
-      );
-    }
-
-    final riff =
-        String.fromCharCodes(bytes.sublist(0, 4));
-
-    final wave =
-        String.fromCharCodes(bytes.sublist(8, 12));
-
-    if (riff != 'RIFF' || wave != 'WAVE') {
-      throw Exception(
-        'Android TTS ने सही WAV audio नहीं बनाया। '
-        'Hindi TTS engine को फिर से check करें।',
-      );
-    }
-
-    return voiceFile.path;
   }
 
-  // ---------------------------------------------------------
-  // FFMPEG PATH QUOTE
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // FALLBACK PICTURE
+  //
+  // Creates a valid PPM image without any extra package.
+  // ------------------------------------------------------------
 
-  String _ffmpegQuote(String path) {
-    final escaped = path.replaceAll(
-      "'",
-      "'\\''",
+  Future<File> _createFallbackImage(
+    Directory dir,
+    int index,
+  ) async {
+    final file = File(
+      '${dir.path}/scene_$index.ppm',
     );
 
-    return "'$escaped'";
+    const int width = 1280;
+    const int height = 720;
+
+    final List<int> bytes = [];
+
+    bytes.addAll(
+      'P6\n$width $height\n255\n'.codeUnits,
+    );
+
+    final Random random = Random(index * 99);
+
+    final int r1 = 30 + random.nextInt(60);
+    final int g1 = 30 + random.nextInt(60);
+    final int b1 = 70 + random.nextInt(80);
+
+    final int r2 = 80 + random.nextInt(80);
+    final int g2 = 30 + random.nextInt(60);
+    final int b2 = 100 + random.nextInt(100);
+
+    for (int y = 0; y < height; y++) {
+      final double p = y / height;
+
+      final int r =
+          (r1 + ((r2 - r1) * p)).round();
+
+      final int g =
+          (g1 + ((g2 - g1) * p)).round();
+
+      final int b =
+          (b1 + ((b2 - b1) * p)).round();
+
+      for (int x = 0; x < width; x++) {
+        bytes.add(r);
+        bytes.add(g);
+        bytes.add(b);
+      }
+    }
+
+    await file.writeAsBytes(
+      bytes,
+      flush: true,
+    );
+
+    return file;
   }
 
-  // ---------------------------------------------------------
-  // CREATE VIDEO
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // AUDIO DURATION
+  // ------------------------------------------------------------
 
-  Future<String> _createVideo(String voicePath) async {
-    final dir = await _getWorkDirectory();
+  Future<double> _getAudioDuration(
+    String voicePath,
+  ) async {
+    final session =
+        await FFprobeKit.getMediaInformation(
+      voicePath,
+    );
+
+    final information =
+        session.getMediaInformation();
+
+    if (information == null) {
+      throw Exception(
+        'Voice duration पता नहीं चल सकी।',
+      );
+    }
+
+    final durationString =
+        information.getDuration();
+
+    final duration =
+        double.tryParse(
+              durationString ?? '',
+            ) ??
+            0;
+
+    if (duration <= 0) {
+      throw Exception(
+        'Voice duration invalid है।',
+      );
+    }
+
+    return duration;
+  }
+
+  // ------------------------------------------------------------
+  // FFMPEG VIDEO
+  // ------------------------------------------------------------
+
+  Future<String> _createVideo(
+    String voicePath,
+  ) async {
+    final dir =
+        await _getWorkDirectory();
 
     final outputFile = File(
       '${dir.path}/NEXO_AI_${DateTime.now().millisecondsSinceEpoch}.mp4',
@@ -254,21 +431,106 @@ class _NexoHomeState extends State<NexoHome> {
       await outputFile.delete();
     }
 
-    if (mounted) {
-      setState(() {
-        _status = 'Video बनाई जा रही है...';
-      });
+    _setStatus(
+      'Voice की duration पता की जा रही है...',
+    );
+
+    final audioDuration =
+        await _getAudioDuration(
+      voicePath,
+    );
+
+    final imageUrls =
+        _getImageUrls(
+      _scriptController.text,
+    );
+
+    final imageFiles =
+        <File>[];
+
+    final maxImages =
+        min(imageUrls.length, 3);
+
+    // ----------------------------------------------------------
+    // DOWNLOAD 3 PICTURES
+    // ----------------------------------------------------------
+
+    for (int i = 0; i < maxImages; i++) {
+      final image =
+          await _downloadImage(
+        imageUrls[i],
+        dir,
+        i + 1,
+      );
+
+      imageFiles.add(image);
     }
 
-    final audio = _ffmpegQuote(voicePath);
-    final output = _ffmpegQuote(outputFile.path);
+    if (imageFiles.isEmpty) {
+      throw Exception(
+        'कोई picture तैयार नहीं हुई।',
+      );
+    }
 
-    /*
-      1280x720 dark background video.
+    _setStatus(
+      'Pictures को video scenes में बदला जा रहा है...',
+    );
 
-      Voice की duration जितनी होगी,
-      video भी उतनी ही देर चलेगी.
-    */
+    // ----------------------------------------------------------
+    // EACH IMAGE DURATION
+    // ----------------------------------------------------------
+
+    final sceneDuration =
+        audioDuration / imageFiles.length;
+
+    final inputs = <String>[];
+
+    final filters = <String>[];
+
+    for (int i = 0;
+        i < imageFiles.length;
+        i++) {
+      final image =
+          _ffmpegQuote(
+        imageFiles[i].path,
+      );
+
+      // -loop 1 = image को लगातार चलाओ
+      // -t = इस scene की duration
+      inputs.add(
+        '-loop 1 -t ${sceneDuration.toStringAsFixed(3)} -i $image',
+      );
+
+      // हल्का zoom/pan effect.
+      //
+      // अगर zoompan किसी device पर problem करे,
+      // तो scale + crop वाला भाग फिर भी काम करेगा.
+      filters.add(
+        '[$i:v]'
+        'scale=1400:900:force_original_aspect_ratio=increase,'
+        'crop=1280:720,'
+        'zoompan='
+        'z=\'min(zoom+0.0008,1.10)\':'
+        'x=\'iw/2-(iw/zoom/2)\':'
+        'y=\'ih/2-(ih/zoom/2)\':'
+        'd=${(sceneDuration * 30).round()}:'
+        's=1280x720:'
+        'fps=30'
+        '[v$i]',
+      );
+    }
+
+    final concatInputs =
+        List.generate(
+      imageFiles.length,
+      (i) => '[v$i]',
+    ).join();
+
+    filters.add(
+      '$concatInputs'
+      'concat=n=${imageFiles.length}:v=1:a=0,'
+      'format=yuv420p[vout]',
+    );
 
     final command = [
       '-y',
@@ -276,20 +538,21 @@ class _NexoHomeState extends State<NexoHome> {
       '-loglevel',
       'error',
 
-      '-f',
-      'lavfi',
+      ...inputs,
 
       '-i',
-      'color=c=0x111827:s=1280x720:r=30',
+      _ffmpegQuote(voicePath),
 
-      '-i',
-      audio,
+      '-filter_complex',
+      _ffmpegQuote(
+        filters.join(';'),
+      ),
 
       '-map',
-      '0:v:0',
+      '[vout]',
 
       '-map',
-      '1:a:0',
+      '${imageFiles.length}:a:0',
 
       '-c:v',
       'mpeg4',
@@ -311,19 +574,29 @@ class _NexoHomeState extends State<NexoHome> {
       '-movflags',
       '+faststart',
 
-      output,
+      _ffmpegQuote(
+        outputFile.path,
+      ),
     ].join(' ');
 
-    final session = await FFmpegKit.execute(
+    _setStatus(
+      'FFmpeg video बना रहा है...',
+    );
+
+    final session =
+        await FFmpegKit.execute(
       command,
     );
 
     final returnCode =
         await session.getReturnCode();
 
-    if (ReturnCode.isSuccess(returnCode)) {
+    if (ReturnCode.isSuccess(
+      returnCode,
+    )) {
       if (await outputFile.exists()) {
-        final size = await outputFile.length();
+        final size =
+            await outputFile.length();
 
         if (size > 10000) {
           return outputFile.path;
@@ -335,28 +608,22 @@ class _NexoHomeState extends State<NexoHome> {
       );
     }
 
-    final logs = await session.getOutput();
-
-    String? failStack;
-
-    try {
-      failStack =
-          await session.getFailStackTrace();
-    } catch (_) {}
+    final logs =
+        await session.getOutput();
 
     throw Exception(
       'FFmpeg video creation failed.\n\n'
-      '$logs\n\n'
-      '${failStack ?? ''}',
+      '${logs ?? 'No FFmpeg output'}',
     );
   }
 
-  // ---------------------------------------------------------
-  // CREATE COMPLETE VIDEO
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // FULL VIDEO
+  // ------------------------------------------------------------
 
   Future<void> _createFullVideo() async {
-    final text = _scriptController.text.trim();
+    final text =
+        _scriptController.text.trim();
 
     if (text.isEmpty) {
       _showMessage(
@@ -378,46 +645,57 @@ class _NexoHomeState extends State<NexoHome> {
     });
 
     try {
-      // STEP 1
+      // ---------------------------------------------
+      // STEP 1: Hindi voice
+      // ---------------------------------------------
+
       final voice =
-          await _createHindiVoice(text);
+          await _createHindiVoice(
+        text,
+      );
 
-      if (mounted) {
-        setState(() {
-          _voicePath = voice;
-          _status =
-              'Hindi voice तैयार है। Video बनाई जा रही है...';
-        });
-      }
+      if (!mounted) return;
 
-      // STEP 2
+      setState(() {
+        _voicePath = voice;
+      });
+
+      // ---------------------------------------------
+      // STEP 2: Pictures + Video
+      // ---------------------------------------------
+
       final video =
-          await _createVideo(voice);
+          await _createVideo(
+        voice,
+      );
 
-      if (mounted) {
-        setState(() {
-          _videoPath = video;
-          _status =
-              'Video सफलतापूर्वक तैयार है।';
-        });
-      }
+      if (!mounted) return;
 
-      // STEP 3
-      await _openVideo(video);
+      setState(() {
+        _videoPath = video;
+        _status = 'Video तैयार है!';
+      });
+
+      // ---------------------------------------------
+      // STEP 3: Preview
+      // ---------------------------------------------
+
+      await _openVideo(
+        video,
+      );
 
       if (mounted) {
         _showMessage(
-          'NEXO AI video तैयार हो गई!',
+          '🎉 Video सफलतापूर्वक बन गया!',
         );
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _status =
-              'Video बनाने में समस्या हुई।';
-        });
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _error = e.toString();
+        _status = 'Video नहीं बन पाया।';
+      });
     } finally {
       if (mounted) {
         setState(() {
@@ -427,11 +705,13 @@ class _NexoHomeState extends State<NexoHome> {
     }
   }
 
-  // ---------------------------------------------------------
-  // VIDEO PLAYER
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // OPEN VIDEO
+  // ------------------------------------------------------------
 
-  Future<void> _openVideo(String path) async {
+  Future<void> _openVideo(
+    String path,
+  ) async {
     await _videoController?.dispose();
 
     final controller =
@@ -447,18 +727,20 @@ class _NexoHomeState extends State<NexoHome> {
     }
 
     setState(() {
-      _videoController = controller;
+      _videoController =
+          controller;
     });
 
     await controller.play();
   }
 
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
   // SHARE VIDEO
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
 
   Future<void> _shareVideo() async {
-    final path = _videoPath;
+    final path =
+        _videoPath;
 
     if (path == null) {
       _showMessage(
@@ -467,7 +749,8 @@ class _NexoHomeState extends State<NexoHome> {
       return;
     }
 
-    final file = File(path);
+    final file =
+        File(path);
 
     if (!await file.exists()) {
       _showMessage(
@@ -478,7 +761,8 @@ class _NexoHomeState extends State<NexoHome> {
 
     await SharePlus.instance.share(
       ShareParams(
-        text: 'NEXO AI से बनाई गई video',
+        text:
+            'NEXO AI से बनाया गया video',
         files: [
           XFile(path),
         ],
@@ -486,164 +770,64 @@ class _NexoHomeState extends State<NexoHome> {
     );
   }
 
-  // ---------------------------------------------------------
-  // MESSAGE
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
+  // FFMPEG QUOTE
+  // ------------------------------------------------------------
 
-  void _showMessage(String message) {
+  String _ffmpegQuote(
+    String path,
+  ) {
+    return "'${path.replaceAll(
+      "'",
+      "'\\''",
+    )}'";
+  }
+
+  // ------------------------------------------------------------
+  // STATUS
+  // ------------------------------------------------------------
+
+  void _setStatus(
+    String status,
+  ) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    setState(() {
+      _status = status;
+    });
+  }
+
+  // ------------------------------------------------------------
+  // MESSAGE
+  // ------------------------------------------------------------
+
+  void _showMessage(
+    String message,
+  ) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(
       SnackBar(
         content: Text(message),
       ),
     );
   }
 
-  // ---------------------------------------------------------
-  // VIDEO PREVIEW
-  // ---------------------------------------------------------
-
-  Widget _buildVideoPreview() {
-    final controller =
-        _videoController!;
-
-    return Container(
-      margin: const EdgeInsets.only(
-        top: 20,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius:
-            BorderRadius.circular(18),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          AspectRatio(
-            aspectRatio:
-                controller.value.aspectRatio,
-            child: VideoPlayer(controller),
-          ),
-
-          Row(
-            mainAxisAlignment:
-                MainAxisAlignment.center,
-            children: [
-              IconButton(
-                onPressed: () {
-                  setState(() {
-                    if (controller
-                        .value
-                        .isPlaying) {
-                      controller.pause();
-                    } else {
-                      controller.play();
-                    }
-                  });
-                },
-                icon: Icon(
-                  controller.value.isPlaying
-                      ? Icons.pause
-                      : Icons.play_arrow,
-                ),
-                iconSize: 35,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------
-  // FEATURE CARD
-  // ---------------------------------------------------------
-
-  Widget _feature(
-    IconData icon,
-    String title,
-    String description,
-  ) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(
-        bottom: 12,
-      ),
-      padding:
-          const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF151B25),
-        borderRadius:
-            BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 55,
-            height: 55,
-            decoration: BoxDecoration(
-              color:
-                  const Color(0xFF2B2050),
-              borderRadius:
-                  BorderRadius.circular(15),
-            ),
-            child: Icon(
-              icon,
-              color:
-                  const Color(0xFFA678FF),
-              size: 28,
-            ),
-          ),
-
-          const SizedBox(width: 15),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style:
-                      const TextStyle(
-                    fontSize: 18,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 4),
-
-                Text(
-                  description,
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white60,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
   // UI
-  // ---------------------------------------------------------
+  // ------------------------------------------------------------
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor:
             const Color(0xFF151B25),
         elevation: 0,
-
         title: const Row(
           children: [
             Text(
@@ -654,9 +838,7 @@ class _NexoHomeState extends State<NexoHome> {
                 fontSize: 30,
               ),
             ),
-
             SizedBox(width: 8),
-
             Text(
               'NEXO AI',
               style: TextStyle(
@@ -670,14 +852,13 @@ class _NexoHomeState extends State<NexoHome> {
       ),
 
       body: SafeArea(
-        child: SingleChildScrollView(
+        child:
+            SingleChildScrollView(
           padding:
               const EdgeInsets.all(16),
-
           child: Column(
             crossAxisAlignment:
                 CrossAxisAlignment.start,
-
             children: [
               const SizedBox(
                 height: 10,
@@ -686,7 +867,7 @@ class _NexoHomeState extends State<NexoHome> {
               const Text(
                 'Script to Video',
                 style: TextStyle(
-                  fontSize: 26,
+                  fontSize: 27,
                   fontWeight:
                       FontWeight.bold,
                 ),
@@ -697,340 +878,5 @@ class _NexoHomeState extends State<NexoHome> {
               ),
 
               const Text(
-                'अपनी कहानी या YouTube script यहाँ डालें।',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 15,
-                ),
-              ),
-
-              const SizedBox(
-                height: 18,
-              ),
-
-              // SCRIPT BOX
-              Container(
-                decoration:
-                    BoxDecoration(
-                  color:
-                      const Color(0xFF111720),
-                  borderRadius:
-                      BorderRadius.circular(
-                    20,
-                  ),
-                  border: Border.all(
-                    color: Colors.white12,
-                  ),
-                ),
-
-                padding:
-                    const EdgeInsets.all(16),
-
-                child: TextField(
-                  controller:
-                      _scriptController,
-
-                  minLines: 12,
-                  maxLines: 25,
-
-                  style:
-                      const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    height: 1.5,
-                  ),
-
-                  decoration:
-                      const InputDecoration(
-                    border:
-                        InputBorder.none,
-
-                    hintText:
-                        'अपनी Hindi script यहाँ लिखें...',
-
-                    hintStyle:
-                        TextStyle(
-                      color:
-                          Colors.white38,
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(
-                height: 18,
-              ),
-
-              // TEST VOICE
-              SizedBox(
-                width: double.infinity,
-                height: 58,
-
-                child:
-                    OutlinedButton.icon(
-                  onPressed:
-                      _working
-                          ? null
-                          : _testHindiVoice,
-
-                  icon: const Icon(
-                    Icons.volume_up,
-                    color:
-                        Color(0xFFB48CFF),
-                  ),
-
-                  label: const Text(
-                    'Test Hindi Voice',
-                    style:
-                        TextStyle(
-                      fontSize: 17,
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(
-                height: 14,
-              ),
-
-              // CREATE VIDEO
-              SizedBox(
-                width: double.infinity,
-                height: 62,
-
-                child:
-                    ElevatedButton.icon(
-                  onPressed:
-                      _working
-                          ? null
-                          : _createFullVideo,
-
-                  icon: _working
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child:
-                              CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color:
-                                Colors.white,
-                          ),
-                        )
-                      : const Icon(
-                          Icons.movie_creation,
-                        ),
-
-                  label: Text(
-                    _working
-                        ? 'Video बन रही है...'
-                        : 'Create Video',
-
-                    style:
-                        const TextStyle(
-                      fontSize: 18,
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
-
-                  style:
-                      ElevatedButton.styleFrom(
-                    backgroundColor:
-                        const Color(
-                      0xFF7C4DFF,
-                    ),
-
-                    foregroundColor:
-                        Colors.white,
-
-                    shape:
-                        RoundedRectangleBorder(
-                      borderRadius:
-                          BorderRadius.circular(
-                        18,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(
-                height: 18,
-              ),
-
-              // PROGRESS
-              if (_working)
-                Container(
-                  width: double.infinity,
-
-                  padding:
-                      const EdgeInsets.all(
-                    18,
-                  ),
-
-                  decoration:
-                      BoxDecoration(
-                    color:
-                        const Color(
-                      0xFF151B25,
-                    ),
-                    borderRadius:
-                        BorderRadius.circular(
-                      18,
-                    ),
-                  ),
-
-                  child: Column(
-                    children: [
-                      const CircularProgressIndicator(
-                        color:
-                            Color(
-                          0xFF9C6BFF,
-                        ),
-                      ),
-
-                      const SizedBox(
-                        height: 14,
-                      ),
-
-                      Text(
-                        _status,
-                        textAlign:
-                            TextAlign.center,
-
-                        style:
-                            const TextStyle(
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-              // ERROR
-              if (_error != null)
-                Container(
-                  width:
-                      double.infinity,
-
-                  margin:
-                      const EdgeInsets.only(
-                    top: 12,
-                  ),
-
-                  padding:
-                      const EdgeInsets.all(
-                    16,
-                  ),
-
-                  decoration:
-                      BoxDecoration(
-                    color:
-                        const Color(
-                      0xFF35151A,
-                    ),
-
-                    borderRadius:
-                        BorderRadius.circular(
-                      18,
-                    ),
-                  ),
-
-                  child: Text(
-                    _error!,
-                    style:
-                        const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-
-              // VIDEO
-              if (_videoController != null &&
-                  _videoController!
-                      .value
-                      .isInitialized)
-                _buildVideoPreview(),
-
-              // SHARE
-              if (_videoPath != null)
-                Padding(
-                  padding:
-                      const EdgeInsets.only(
-                    top: 14,
-                  ),
-
-                  child: SizedBox(
-                    width:
-                        double.infinity,
-                    height: 55,
-
-                    child:
-                        ElevatedButton.icon(
-                      onPressed:
-                          _shareVideo,
-
-                      icon: const Icon(
-                        Icons.share,
-                      ),
-
-                      label:
-                          const Text(
-                        'Save / Share Video',
-                        style:
-                            TextStyle(
-                          fontSize: 17,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-              const SizedBox(
-                height: 30,
-              ),
-
-              const Text(
-                'Features',
-                style: TextStyle(
-                  fontSize: 25,
-                  fontWeight:
-                      FontWeight.bold,
-                ),
-              ),
-
-              const SizedBox(
-                height: 14,
-              ),
-
-              _feature(
-                Icons.text_fields,
-                'Script to Video',
-                'आपकी script से video project बनता है।',
-              ),
-
-              _feature(
-                Icons.record_voice_over,
-                'Hindi Voice',
-                'Android Hindi TTS से voice बनाई जाती है।',
-              ),
-
-              _feature(
-                Icons.movie,
-                'MP4 Video',
-                'Hindi voice के साथ MP4 video तैयार होती है।',
-              ),
-
-              _feature(
-                Icons.save,
-                'Save & Share',
-                'Video को share किया जा सकता है।',
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+                'Hindi script डालें और NEXO AI voice + pictures के साथ MP4 video बनाएगा।',
+       

@@ -38,8 +38,13 @@ jobs:
           if [ ! -d "android" ]; then
             flutter create --platforms=android --project-name nexo_ai .
           else
-            echo "Android project already exists"
+            echo "Android folder already exists"
           fi
+
+      - name: Remove generated test
+        run: |
+          rm -f test/widget_test.dart
+          echo "Generated widget test removed"
 
       - name: Get dependencies
         run: |

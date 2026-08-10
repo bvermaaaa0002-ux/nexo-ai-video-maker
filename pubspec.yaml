@@ -1,10 +1,26 @@
+name: nexo_ai
+description: NEXO AI Script to Video
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
 dependencies:
   flutter:
     sdk: flutter
 
   flutter_tts: ^4.2.5
   path_provider: ^2.1.5
-  ffmpeg_kit_flutter_new: ^4.1.0
+  ffmpeg_kit_flutter_new: ^3.2.0
   video_player: ^2.10.0
-  share_plus: ^12.0.0
-  http: ^1.5.0
+  share_plus: ^12.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

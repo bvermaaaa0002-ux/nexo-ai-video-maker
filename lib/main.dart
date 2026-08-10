@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:video_player/video_player.dart';
@@ -24,7 +26,7 @@ class NexoApp extends StatelessWidget {
       title: 'NEXO AI',
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF080B12),
+        scaffoldBackgroundColor: const Color(0xFF080C12),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF7C4DFF),
           brightness: Brightness.dark,
@@ -34,6 +36,16 @@ class NexoApp extends StatelessWidget {
       home: const NexoHome(),
     );
   }
+}
+
+class Scene {
+  final String text;
+  final String keyword;
+
+  const Scene({
+    required this.text,
+    required this.keyword,
+  });
 }
 
 class NexoHome extends StatefulWidget {
@@ -54,7 +66,6 @@ class _NexoHomeState extends State<NexoHome> {
   bool _working = false;
 
   String _status = '';
-
   String? _videoPath;
   String? _voicePath;
   String? _error;
@@ -67,7 +78,7 @@ class _NexoHomeState extends State<NexoHome> {
     super.dispose();
   }
 
-  Future<Directory> _getWorkDirectory() async {
+  Future<Directory> _workDirectory() async {
     final base = await getApplicationDocumentsDirectory();
 
     final dir = Directory(
@@ -81,68 +92,19 @@ class _NexoHomeState extends State<NexoHome> {
     return dir;
   }
 
-  // ------------------------------------------------------------
-  // HINDI TTS
-  // ------------------------------------------------------------
-
-  Future<String> _createHindiVoice(String text) async {
-    final dir = await _getWorkDirectory();
-
-    final file = File(
-      '${dir.path}/nexo_voice_${DateTime.now().millisecondsSinceEpoch}.wav',
-    );
-
-    if (await file.exists()) {
-      await file.delete();
-    }
+  void _setStatus(String text) {
+    if (!mounted) return;
 
     setState(() {
-      _status = 'Hindi voice बनाई जा रही है...';
+      _status = text;
     });
-
-    await _tts.stop();
-
-    await _tts.setLanguage('hi-IN');
-    await _tts.setSpeechRate(0.47);
-    await _tts.setVolume(1.0);
-    await _tts.setPitch(0.95);
-
-    final result = await _tts.synthesizeToFile(
-      text,
-      file.path,
-      true,
-    );
-
-    if (result != 1) {
-      throw Exception(
-        'Hindi TTS audio file नहीं बन सकी।',
-      );
-    }
-
-    for (int i = 0; i < 40; i++) {
-      await Future.delayed(
-        const Duration(milliseconds: 300),
-      );
-
-      if (await file.exists()) {
-        final size = await file.length();
-
-        if (size > 1000) {
-          return file.path;
-        }
-      }
-    }
-
-    throw Exception(
-      'Hindi voice file create नहीं हुई।',
-    );
   }
 
-  Future<void> _testHindiVoice() async {
+  Future<void> _testVoice() async {
     final text = _scriptController.text.trim();
 
     if (text.isEmpty) {
-      _showMessage('पहले script लिखें।');
+      _message('पहले script लिखें।');
       return;
     }
 
@@ -156,403 +118,256 @@ class _NexoHomeState extends State<NexoHome> {
 
       await _tts.speak(text);
     } catch (e) {
-      _showMessage(
-        'Hindi voice error: $e',
-      );
+      _message('Voice error: $e');
     }
   }
 
-  // ------------------------------------------------------------
-  // SCRIPT SCENES
-  // ------------------------------------------------------------
-
-  List<String> _makeScenes(String text) {
-    final clean = text
+  List<Scene> _makeScenes(String script) {
+    final cleaned = script
         .replaceAll('\r', '')
         .trim();
 
-    if (clean.isEmpty) {
+    if (cleaned.isEmpty) {
       return [];
     }
 
-    final paragraphs = clean
+    final paragraphs = cleaned
         .split(RegExp(r'\n\s*\n'))
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toList();
 
-    if (paragraphs.length >= 2) {
-      return paragraphs;
-    }
+    final List<Scene> scenes = [];
 
-    final sentences = clean
-        .split(RegExp(r'(?<=[।!?])\s+'))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    for (final paragraph in paragraphs) {
+      final sentences = paragraph
+          .split(RegExp(r'(?<=[.!?।])\s+'))
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
 
-    final List<String> scenes = [];
+      if (sentences.isEmpty) {
+        continue;
+      }
 
-    String current = '';
+      String current = '';
 
-    for (final sentence in sentences) {
-      current += '$sentence ';
+      for (final sentence in sentences) {
+        final candidate =
+            current.isEmpty ? sentence : '$current $sentence';
 
-      if (current.length > 180) {
-        scenes.add(current.trim());
-        current = '';
+        if (candidate.length > 180 && current.isNotEmpty) {
+          scenes.add(
+            Scene(
+              text: current,
+              keyword: _keywordFromText(current),
+            ),
+          );
+
+          current = sentence;
+        } else {
+          current = candidate;
+        }
+      }
+
+      if (current.isNotEmpty) {
+        scenes.add(
+          Scene(
+            text: current,
+            keyword: _keywordFromText(current),
+          ),
+        );
       }
     }
 
-    if (current.trim().isNotEmpty) {
-      scenes.add(current.trim());
-    }
-
     if (scenes.isEmpty) {
-      scenes.add(clean);
+      scenes.add(
+        Scene(
+          text: cleaned,
+          keyword: _keywordFromText(cleaned),
+        ),
+      );
     }
 
     return scenes;
   }
 
-  // ------------------------------------------------------------
-  // CREATE SVG VISUALS
-  // ------------------------------------------------------------
+  String _keywordFromText(String text) {
+    final lower = text.toLowerCase();
 
-  Future<List<String>> _createSceneImages(
-    List<String> scenes,
+    if (lower.contains('school') ||
+        lower.contains('स्कूल') ||
+        lower.contains('class') ||
+        lower.contains('कक्षा')) {
+      return 'school';
+    }
+
+    if (lower.contains('love') ||
+        lower.contains('प्यार') ||
+        lower.contains('इश्क') ||
+        lower.contains('दिल')) {
+      return 'love';
+    }
+
+    if (lower.contains('रात') ||
+        lower.contains('night') ||
+        lower.contains('अंधेरा') ||
+        lower.contains('dark')) {
+      return 'night';
+    }
+
+    if (lower.contains('जंगल') ||
+        lower.contains('forest') ||
+        lower.contains('पेड़')) {
+      return 'forest';
+    }
+
+    if (lower.contains('समुद्र') ||
+        lower.contains('sea') ||
+        lower.contains('ocean') ||
+        lower.contains('beach')) {
+      return 'ocean';
+    }
+
+    if (lower.contains('शहर') ||
+        lower.contains('city') ||
+        lower.contains('सड़क')) {
+      return 'city';
+    }
+
+    if (lower.contains('बारिश') ||
+        lower.contains('rain')) {
+      return 'rain';
+    }
+
+    if (lower.contains('घर') ||
+        lower.contains('home') ||
+        lower.contains('कमरा')) {
+      return 'home';
+    }
+
+    if (lower.contains('रहस्य') ||
+        lower.contains('mystery') ||
+        lower.contains('भूत') ||
+        lower.contains('ghost')) {
+      return 'mystery';
+    }
+
+    return 'cinematic';
+  }
+
+  Future<String> _downloadImage(
+    String keyword,
+    Directory dir,
+    int index,
   ) async {
-    final dir = await _getWorkDirectory();
+    final safeKeyword = Uri.encodeComponent(
+      keyword.replaceAll(' ', ','),
+    );
 
-    final List<String> images = [];
+    final url =
+        'https://loremflickr.com/1280/720/$safeKeyword';
 
-    final colors = [
-      '#17102B',
-      '#0B2638',
-      '#24120E',
-      '#10251C',
-      '#27152A',
-      '#101B35',
-      '#281F0C',
-      '#14252A',
-    ];
+    final response = await http
+        .get(
+          Uri.parse(url),
+          headers: {
+            'User-Agent': 'NEXO-AI/1.0',
+          },
+        )
+        .timeout(
+          const Duration(seconds: 20),
+        );
 
-    for (int i = 0; i < scenes.length; i++) {
-      setState(() {
-        _status =
-            'Scene ${i + 1}/${scenes.length} का visual बनाया जा रहा है...';
-      });
-
-      final imagePath =
-          '${dir.path}/scene_$i.svg';
-
-      final safeText = _escapeXml(
-        scenes[i].length > 180
-            ? '${scenes[i].substring(0, 180)}...'
-            : scenes[i],
-      );
-
-      final color =
-          colors[i % colors.length];
-
-      final svg = '''
-<svg xmlns="http://www.w3.org/2000/svg"
-width="1280"
-height="720"
-viewBox="0 0 1280 720">
-
-<defs>
-
-<linearGradient id="bg"
-x1="0"
-y1="0"
-x2="1"
-y2="1">
-
-<stop offset="0%"
-stop-color="$color"/>
-
-<stop offset="100%"
-stop-color="#05070D"/>
-
-</linearGradient>
-
-<filter id="shadow">
-<feDropShadow
-dx="0"
-dy="8"
-stdDeviation="12"
-flood-opacity="0.5"/>
-</filter>
-
-</defs>
-
-<rect
-width="1280"
-height="720"
-fill="url(#bg)"/>
-
-<circle
-cx="${180 + (i * 83) % 850}"
-cy="150"
-r="110"
-fill="#8B5CF6"
-opacity="0.10"/>
-
-<circle
-cx="${1000 - (i * 71) % 600}"
-cy="560"
-r="180"
-fill="#06B6D4"
-opacity="0.08"/>
-
-<text
-x="80"
-y="100"
-font-family="sans-serif"
-font-size="34"
-font-weight="bold"
-fill="#BFA8FF">
-NEXO AI
-</text>
-
-<text
-x="80"
-y="185"
-font-family="sans-serif"
-font-size="30"
-font-weight="bold"
-fill="#FFFFFF">
-SCENE ${i + 1}
-</text>
-
-<rect
-x="70"
-y="230"
-width="1140"
-height="330"
-rx="32"
-fill="#000000"
-opacity="0.35"
-filter="url(#shadow)"/>
-
-<text
-x="110"
-y="310"
-font-family="sans-serif"
-font-size="30"
-font-weight="bold"
-fill="#FFFFFF">
-
-<tspan x="110" dy="0">
-$safeText
-</tspan>
-
-</text>
-
-<text
-x="80"
-y="650"
-font-family="sans-serif"
-font-size="22"
-fill="#C9C9D4">
-Script to Video • Hindi AI Voice
-</text>
-
-</svg>
-''';
-
-      await File(imagePath).writeAsString(svg);
-
-      images.add(imagePath);
-    }
-
-    return images;
-  }
-
-  String _escapeXml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&apos;');
-  }
-
-  // ------------------------------------------------------------
-  // CREATE BACKGROUND MUSIC
-  // ------------------------------------------------------------
-
-  Future<String> _createBackgroundMusic() async {
-    final dir = await _getWorkDirectory();
-
-    final musicPath =
-        '${dir.path}/background_music.wav';
-
-    setState(() {
-      _status = 'Background music तैयार की जा रही है...';
-    });
-
-    final command = [
-      '-y',
-      '-f',
-      'lavfi',
-      '-i',
-      'sine=frequency=220:sample_rate=44100',
-      '-t',
-      '60',
-      '-filter_complex',
-      'volume=0.06',
-      musicPath,
-    ].join(' ');
-
-    final session =
-        await FFmpegKit.execute(command);
-
-    final code =
-        await session.getReturnCode();
-
-    if (!ReturnCode.isSuccess(code)) {
+    if (response.statusCode != 200 ||
+        response.bodyBytes.isEmpty) {
       throw Exception(
-        'Background music create नहीं हुई।',
+        'Image download failed for: $keyword',
       );
     }
 
-    return musicPath;
+    final file = File(
+      '${dir.path}/scene_$index.jpg',
+    );
+
+    await file.writeAsBytes(
+      response.bodyBytes,
+      flush: true,
+    );
+
+    return file.path;
   }
 
-  // ------------------------------------------------------------
-  // CREATE SOUND EFFECT
-  // ------------------------------------------------------------
+  Future<String> _createVoice(
+    String text,
+    Directory dir,
+  ) async {
+    final voiceFile = File(
+      '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.wav',
+    );
 
-  Future<String> _createSoundEffect() async {
-    final dir = await _getWorkDirectory();
+    if (await voiceFile.exists()) {
+      await voiceFile.delete();
+    }
 
-    final soundPath =
-        '${dir.path}/scene_sfx.wav';
+    _setStatus('Hindi voice बनाई जा रही है...');
 
-    final command = [
-      '-y',
-      '-f',
-      'lavfi',
-      '-i',
-      'sine=frequency=880:sample_rate=44100',
-      '-t',
-      '0.35',
-      '-af',
-      'afade=t=out:st=0.05:d=0.30,volume=0.12',
-      soundPath,
-    ].join(' ');
+    await _tts.stop();
 
-    final session =
-        await FFmpegKit.execute(command);
+    await _tts.setLanguage('hi-IN');
+    await _tts.setSpeechRate(0.47);
+    await _tts.setVolume(1.0);
+    await _tts.setPitch(0.95);
 
-    final code =
-        await session.getReturnCode();
+    final result = await _tts.synthesizeToFile(
+      text,
+      voiceFile.path,
+      true,
+    );
 
-    if (!ReturnCode.isSuccess(code)) {
+    if (result != 1) {
       throw Exception(
-        'Sound effect create नहीं हुआ।',
+        'Hindi TTS voice file नहीं बन पाई।',
       );
     }
 
-    return soundPath;
+    for (int i = 0; i < 40; i++) {
+      await Future.delayed(
+        const Duration(milliseconds: 300),
+      );
+
+      if (await voiceFile.exists()) {
+        final size = await voiceFile.length();
+
+        if (size > 2000) {
+          return voiceFile.path;
+        }
+      }
+    }
+
+    throw Exception(
+      'Voice file तैयार नहीं हुई।',
+    );
   }
 
-  // ------------------------------------------------------------
-  // CREATE VIDEO
-  // ------------------------------------------------------------
-
-  Future<String> _createVideo(
+  Future<String> _createSceneVideo(
+    Scene scene,
+    String imagePath,
     String voicePath,
-    List<String> scenes,
+    Directory dir,
+    int index,
   ) async {
-    final dir =
-        await _getWorkDirectory();
-
-    final outputFile = File(
-      '${dir.path}/NEXO_AI_${DateTime.now().millisecondsSinceEpoch}.mp4',
+    final output = File(
+      '${dir.path}/scene_video_$index.mp4',
     );
 
-    if (await outputFile.exists()) {
-      await outputFile.delete();
+    if (await output.exists()) {
+      await output.delete();
     }
 
-    final images =
-        await _createSceneImages(scenes);
-
-    final music =
-        await _createBackgroundMusic();
-
-    final sfx =
-        await _createSoundEffect();
-
-    setState(() {
-      _status =
-          'Voice + images + music + sound effects मिलाए जा रहे हैं...';
-    });
-
-    /*
-      सभी scene images को 5 सेकंड के clips में बदलना।
-    */
-
-    final inputs = <String>[];
-
-    for (final image in images) {
-      inputs.add(
-        '-loop 1 -t 5 -i ${_quote(image)}',
-      );
-    }
-
-    final voiceInput =
-        '-i ${_quote(voicePath)}';
-
-    final musicInput =
-        '-stream_loop -1 -i ${_quote(music)}';
-
-    final sfxInput =
-        '-stream_loop -1 -i ${_quote(sfx)}';
-
-    final filterParts = <String>[];
-
-    for (int i = 0; i < images.length; i++) {
-      filterParts.add(
-        '[$i:v]scale=1280:720:force_original_aspect_ratio=decrease,'
-        'pad=1280:720:(ow-iw)/2:(oh-ih)/2,'
-        'zoompan=z=\'min(zoom+0.0007,1.08)\':'
-        'x=\'iw/2-(iw/zoom/2)\':'
-        'y=\'ih/2-(ih/zoom/2)\':'
-        'd=150:s=1280x720:fps=30,'
-        'format=yuv420p[v$i]',
-      );
-    }
-
-    final concatInputs = List.generate(
-      images.length,
-      (i) => '[v$i]',
-    ).join();
-
-    filterParts.add(
-      '$concatInputs'
-      'concat=n=${images.length}:v=1:a=0[video]',
-    );
-
-    final videoFilter =
-        filterParts.join(';');
-
-    final audioFilter =
-        '[${images.length}:a]'
-        'volume=1.0[voice];'
-        '[${images.length + 1}:a]'
-        'volume=0.055[music];'
-        '[${images.length + 2}:a]'
-        'volume=0.08[sfx];'
-        '[voice][music][sfx]'
-        'amix=inputs=3:duration=first:dropout_transition=2'
-        '[audio]';
-
-    final fullFilter =
-        '$videoFilter;$audioFilter';
+    final image = _quote(imagePath);
+    final voice = _quote(voicePath);
+    final out = _quote(output.path);
 
     final command = [
       '-y',
@@ -560,93 +375,242 @@ Script to Video • Hindi AI Voice
       '-loglevel',
       'error',
 
-      ...inputs,
+      '-loop',
+      '1',
+      '-i',
+      image,
 
-      voiceInput,
-      musicInput,
-      sfxInput,
-
-      '-filter_complex',
-      _quote(fullFilter),
-
-      '-map',
-      '[video]',
+      '-i',
+      voice,
 
       '-map',
-      '[audio]',
+      '0:v:0',
+      '-map',
+      '1:a:0',
+
+      '-vf',
+      'scale=1280:720:force_original_aspect_ratio=increase,'
+          'crop=1280:720,'
+          'format=yuv420p',
 
       '-c:v',
       'mpeg4',
 
       '-q:v',
-      '4',
+      '5',
 
-      '-pix_fmt',
-      'yuv420p',
+      '-r',
+      '30',
 
       '-c:a',
       'aac',
 
       '-b:a',
-      '160k',
+      '128k',
 
       '-shortest',
 
       '-movflags',
       '+faststart',
 
-      _quote(outputFile.path),
+      out,
     ].join(' ');
 
     final session =
         await FFmpegKit.execute(command);
 
-    final returnCode =
+    final code =
         await session.getReturnCode();
 
-    if (ReturnCode.isSuccess(returnCode)) {
-      if (await outputFile.exists()) {
-        final size =
-            await outputFile.length();
-
-        if (size > 10000) {
-          return outputFile.path;
-        }
-      }
+    if (!ReturnCode.isSuccess(code)) {
+      final logs = await session.getOutput();
 
       throw Exception(
-        'Video output file नहीं मिली।',
+        'Scene video failed:\n$logs',
       );
     }
 
-    final logs =
-        await session.getOutput();
+    if (!await output.exists()) {
+      throw Exception(
+        'Scene video file नहीं बनी।',
+      );
+    }
 
-    throw Exception(
-      'FFmpeg video creation failed.\n\n$logs',
+    if (await output.length() < 10000) {
+      throw Exception(
+        'Scene video खाली है।',
+      );
+    }
+
+    return output.path;
+  }
+
+  Future<String> _concatVideos(
+    List<String> videos,
+    Directory dir,
+  ) async {
+    final listFile = File(
+      '${dir.path}/videos.txt',
+    );
+
+    final buffer = StringBuffer();
+
+    for (final video in videos) {
+      buffer.writeln(
+        "file '${video.replaceAll("'", "'\\''")}'",
+      );
+    }
+
+    await listFile.writeAsString(
+      buffer.toString(),
+      flush: true,
+    );
+
+    final finalVideo = File(
+      '${dir.path}/NEXO_AI_FINAL_${DateTime.now().millisecondsSinceEpoch}.mp4',
+    );
+
+    final command = [
+      '-y',
+      '-hide_banner',
+      '-loglevel',
+      'error',
+
+      '-f',
+      'concat',
+
+      '-safe',
+      '0',
+
+      '-i',
+      _quote(listFile.path),
+
+      '-c',
+      'copy',
+
+      '-movflags',
+      '+faststart',
+
+      _quote(finalVideo.path),
+    ].join(' ');
+
+    final session =
+        await FFmpegKit.execute(command);
+
+    final code =
+        await session.getReturnCode();
+
+    if (!ReturnCode.isSuccess(code)) {
+      final logs = await session.getOutput();
+
+      throw Exception(
+        'Final video merge failed:\n$logs',
+      );
+    }
+
+    if (!await finalVideo.exists()) {
+      throw Exception(
+        'Final MP4 नहीं बनी।',
+      );
+    }
+
+    return finalVideo.path;
+  }
+
+  Future<String> _createFinalVideo() async {
+    final script =
+        _scriptController.text.trim();
+
+    if (script.isEmpty) {
+      throw Exception(
+        'Script खाली है।',
+      );
+    }
+
+    final dir = await _workDirectory();
+
+    final scenes = _makeScenes(script);
+
+    if (scenes.isEmpty) {
+      throw Exception(
+        'Script से scenes नहीं बन सके।',
+      );
+    }
+
+    _setStatus(
+      '${scenes.length} scenes तैयार किए जा रहे हैं...',
+    );
+
+    final List<String> sceneVideos = [];
+
+    for (int i = 0; i < scenes.length; i++) {
+      final scene = scenes[i];
+
+      _setStatus(
+        'Scene ${i + 1}/${scenes.length}\n'
+        'चित्र डाउनलोड किया जा रहा है...',
+      );
+
+      final imagePath = await _downloadImage(
+        scene.keyword,
+        dir,
+        i,
+      );
+
+      _setStatus(
+        'Scene ${i + 1}/${scenes.length}\n'
+        'Voice बनाई जा रही है...',
+      );
+
+      final voicePath = await _createVoice(
+        scene.text,
+        dir,
+      );
+
+      _setStatus(
+        'Scene ${i + 1}/${scenes.length}\n'
+        'Video बनाई जा रही है...',
+      );
+
+      final sceneVideo =
+          await _createSceneVideo(
+        scene,
+        imagePath,
+        voicePath,
+        dir,
+        i,
+      );
+
+      sceneVideos.add(sceneVideo);
+    }
+
+    _setStatus(
+      'सभी scenes को एक video में जोड़ा जा रहा है...',
+    );
+
+    return _concatVideos(
+      sceneVideos,
+      dir,
     );
   }
 
   String _quote(String value) {
-    return "'${value.replaceAll("'", "'\\''")}'";
+    return "'${value.replaceAll(
+      "'",
+      "'\\''",
+    )}'";
   }
 
-  // ------------------------------------------------------------
-  // COMPLETE VIDEO
-  // ------------------------------------------------------------
+  Future<void> _createVideo() async {
+    if (_working) return;
 
-  Future<void> _createFullVideo() async {
-    final text =
+    final script =
         _scriptController.text.trim();
 
-    if (text.isEmpty) {
-      _showMessage(
-        'पहले अपनी script डालें।',
+    if (script.isEmpty) {
+      _message(
+        'पहले Hindi script लिखें।',
       );
-      return;
-    }
-
-    if (_working) {
       return;
     }
 
@@ -659,52 +623,30 @@ Script to Video • Hindi AI Voice
     });
 
     try {
-      final scenes =
-          _makeScenes(text);
-
-      if (scenes.isEmpty) {
-        throw Exception(
-          'Script से scene नहीं बन सके।',
-        );
-      }
-
-      final voice =
-          await _createHindiVoice(text);
-
-      if (mounted) {
-        setState(() {
-          _voicePath = voice;
-        });
-      }
-
       final video =
-          await _createVideo(
-        voice,
-        scenes,
-      );
+          await _createFinalVideo();
 
-      if (mounted) {
-        setState(() {
-          _videoPath = video;
-          _status =
-              'Video सफलतापूर्वक तैयार है।';
-        });
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _videoPath = video;
+        _status = 'Video तैयार है।';
+      });
 
       await _openVideo(video);
 
       if (mounted) {
-        _showMessage(
-          'NEXO AI video तैयार हो गया!',
+        _message(
+          'NEXO AI video सफलतापूर्वक बन गई।',
         );
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _status = 'Video नहीं बन सका।';
-        });
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _error = e.toString();
+        _status = 'Video नहीं बन पाई।';
+      });
     } finally {
       if (mounted) {
         setState(() {
@@ -714,13 +656,7 @@ Script to Video • Hindi AI Voice
     }
   }
 
-  // ------------------------------------------------------------
-  // VIDEO PLAYER
-  // ------------------------------------------------------------
-
-  Future<void> _openVideo(
-    String path,
-  ) async {
+  Future<void> _openVideo(String path) async {
     await _videoController?.dispose();
 
     final controller =
@@ -742,26 +678,20 @@ Script to Video • Hindi AI Voice
     await controller.play();
   }
 
-  // ------------------------------------------------------------
-  // SHARE
-  // ------------------------------------------------------------
-
   Future<void> _shareVideo() async {
-    final path =
-        _videoPath;
+    final path = _videoPath;
 
     if (path == null) {
-      _showMessage(
+      _message(
         'पहले video बनाएं।',
       );
       return;
     }
 
-    final file =
-        File(path);
+    final file = File(path);
 
     if (!await file.exists()) {
-      _showMessage(
+      _message(
         'Video file नहीं मिली।',
       );
       return;
@@ -769,8 +699,7 @@ Script to Video • Hindi AI Voice
 
     await SharePlus.instance.share(
       ShareParams(
-        text:
-            'NEXO AI से बनाया गया video',
+        text: 'NEXO AI से बनाई गई video',
         files: [
           XFile(path),
         ],
@@ -778,9 +707,7 @@ Script to Video • Hindi AI Voice
     );
   }
 
-  void _showMessage(
-    String message,
-  ) {
+  void _message(String message) {
     if (!mounted) return;
 
     ScaffoldMessenger.of(context)
@@ -791,14 +718,8 @@ Script to Video • Hindi AI Voice
     );
   }
 
-  // ------------------------------------------------------------
-  // UI
-  // ------------------------------------------------------------
-
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor:
@@ -808,8 +729,7 @@ Script to Video • Hindi AI Voice
             Text(
               '✦',
               style: TextStyle(
-                color:
-                    Color(0xFF9C6BFF),
+                color: Color(0xFF9C6BFF),
                 fontSize: 30,
               ),
             ),
@@ -818,41 +738,35 @@ Script to Video • Hindi AI Voice
               'NEXO AI',
               style: TextStyle(
                 fontSize: 25,
-                fontWeight:
-                    FontWeight.bold,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ],
         ),
       ),
-
       body: SafeArea(
-        child:
-            SingleChildScrollView(
-          padding:
-              const EdgeInsets.all(16),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment:
                 CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
 
               const Text(
                 'Script to Video',
                 style: TextStyle(
-                  fontSize: 28,
-                  fontWeight:
-                      FontWeight.bold,
+                  fontSize: 27,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
 
               const SizedBox(height: 8),
 
               const Text(
-                'अपनी Hindi कहानी या YouTube script डालें और video बनाएं।',
+                'अपनी Hindi कहानी या YouTube script डालें।',
                 style: TextStyle(
-                  color:
-                      Colors.white70,
+                  color: Colors.white70,
                   fontSize: 15,
                 ),
               ),
@@ -860,73 +774,55 @@ Script to Video • Hindi AI Voice
               const SizedBox(height: 18),
 
               Container(
-                decoration:
-                    BoxDecoration(
-                  color:
-                      const Color(0xFF111720),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF111720),
                   borderRadius:
-                      BorderRadius.circular(
-                    20,
-                  ),
-                  border:
-                      Border.all(
-                    color:
-                        Colors.white12,
+                      BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white12,
                   ),
                 ),
                 padding:
-                    const EdgeInsets.all(
-                  16,
-                ),
+                    const EdgeInsets.all(16),
                 child: TextField(
                   controller:
                       _scriptController,
                   minLines: 12,
                   maxLines: 25,
-                  style:
-                      const TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 17,
                     height: 1.5,
                   ),
                   decoration:
                       const InputDecoration(
-                    border:
-                        InputBorder.none,
+                    border: InputBorder.none,
                     hintText:
-                        'अपनी Hindi script यहाँ लिखें...',
-                    hintStyle:
-                        TextStyle(
-                      color:
-                          Colors.white38,
+                        'यहाँ अपनी Hindi script लिखें...',
+                    hintStyle: TextStyle(
+                      color: Colors.white38,
                     ),
                   ),
                 ),
               ),
 
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
 
               SizedBox(
-                width:
-                    double.infinity,
+                width: double.infinity,
                 height: 58,
-                child:
-                    OutlinedButton.icon(
-                  onPressed:
-                      _working
-                          ? null
-                          : _testHindiVoice,
-                  icon:
-                      const Icon(
+                child: OutlinedButton.icon(
+                  onPressed: _working
+                      ? null
+                      : _testVoice,
+                  icon: const Icon(
                     Icons.volume_up,
                     color:
                         Color(0xFFB48CFF),
                   ),
-                  label:
-                      const Text(
+                  label: const Text(
                     'Test Hindi Voice',
-                    style:
-                        TextStyle(
+                    style: TextStyle(
                       fontSize: 17,
                     ),
                   ),
@@ -936,15 +832,12 @@ Script to Video • Hindi AI Voice
               const SizedBox(height: 14),
 
               SizedBox(
-                width:
-                    double.infinity,
+                width: double.infinity,
                 height: 62,
-                child:
-                    ElevatedButton.icon(
-                  onPressed:
-                      _working
-                          ? null
-                          : _createFullVideo,
+                child: ElevatedButton.icon(
+                  onPressed: _working
+                      ? null
+                      : _createVideo,
                   icon: _working
                       ? const SizedBox(
                           width: 22,
@@ -952,9 +845,79 @@ Script to Video • Hindi AI Voice
                           child:
                               CircularProgressIndicator(
                             strokeWidth: 2,
-                            color:
-                                Colors.white,
+                            color: Colors.white,
                           ),
                         )
                       : const Icon(
-                 
+                          Icons.movie_creation,
+                        ),
+                  label: Text(
+                    _working
+                        ? 'Video बन रही है...'
+                        : 'Create Video',
+                    style:
+                        const TextStyle(
+                      fontSize: 18,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                  style:
+                      ElevatedButton.styleFrom(
+                    backgroundColor:
+                        const Color(0xFF7C4DFF),
+                    foregroundColor:
+                        Colors.white,
+                    shape:
+                        RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(
+                        18,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 18),
+
+              if (_working)
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.all(18),
+                  decoration:
+                      BoxDecoration(
+                    color:
+                        const Color(0xFF151B25),
+                    borderRadius:
+                        BorderRadius.circular(
+                      18,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      const CircularProgressIndicator(
+                        color:
+                            Color(0xFF9C6BFF),
+                      ),
+                      const SizedBox(
+                        height: 14,
+                      ),
+                      Text(
+                        _status,
+                        textAlign:
+                            TextAlign.center,
+                        style:
+                            const TextStyle(
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              if (_error != null)
+                Container(
+                  width: double.infinity,
+                  margi

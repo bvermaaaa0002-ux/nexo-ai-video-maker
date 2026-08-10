@@ -1,4 +1,4 @@
-name: Build Release APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -15,114 +15,203 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. GitHub repository डाउनलोड
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Flutter setup
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
+      # 3. Flutter और Dart version दिखाएँ
       - name: Show Flutter version
         run: |
           flutter --version
           dart --version
 
+      # 4. Flutter project ढूँढें
       - name: Find Flutter project
-        run: |
-          echo "Current directory:"
-          pwd
-
-          echo "Repository files:"
-          find . -maxdepth 2 -type f | sort
-
-      - name: Create Flutter project if needed
         shell: bash
         run: |
           set -e
 
-          if [ ! -f "./pubspec.yaml" ]; then
-            echo "pubspec.yaml not found."
-            echo "Creating fresh Flutter project..."
+          echo "Searching for pubspec.yaml..."
 
-            rm -rf /tmp/nexo_flutter
+          if [ -f "pubspec.yaml" ]; then
+            echo "Flutter project found in repository root."
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          PROJECT_DIR=$(find . -maxdepth 3 -type f -name "pubspec.yaml" \
+            -not -path "./.git/*" \
+            -print -quit | xargs -r dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: pubspec.yaml was not found."
+            echo "A valid Flutter project is required."
+            exit 1
+          fi
+
+          echo "Flutter project found at: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      # 5. Project की basic files check करें
+      - name: Check Flutter project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "Project directory:"
+          pwd
+
+          echo ""
+          echo "Project files:"
+          ls -la
+
+          if [ ! -f "pubspec.yaml" ]; then
+            echo "ERROR: pubspec.yaml is missing."
+            exit 1
+          fi
+
+          if [ ! -d "lib" ]; then
+            echo "WARNING: lib directory is missing."
+          fi
+
+          echo ""
+          echo "pubspec.yaml found successfully."
+
+      # 6. सबसे महत्वपूर्ण:
+      # Missing / old Android project को fresh Flutter Android project से बनाना
+      - name: Create or repair Android project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "Checking Android project..."
+
+          if [ ! -d "android" ]; then
+            echo "Android directory is missing."
+            echo "Creating fresh Android project..."
 
             flutter create \
               --platforms=android \
-              --org com.nexo \
-              --project-name nexo_ai_video_maker \
-              /tmp/nexo_flutter
+              --no-pub \
+              .
 
-            echo "Flutter project created."
-
-            echo "Copying Flutter project into repository..."
-
-            cp -a /tmp/nexo_flutter/. .
-
-            echo "Files after copy:"
-            ls -la
           else
-            echo "Flutter project already exists."
+            echo "Android directory already exists."
+
+            if [ ! -f "android/settings.gradle" ] && \
+               [ ! -f "android/settings.gradle.kts" ]; then
+
+              echo "Android project appears incomplete."
+              echo "Regenerating Android project..."
+
+              rm -rf android
+
+              flutter create \
+                --platforms=android \
+                --no-pub \
+                .
+            fi
           fi
 
+          echo ""
+          echo "Android directory:"
+          ls -la android
+
+      # 7. Verify Android project
       - name: Verify Flutter project
         shell: bash
         run: |
           set -e
 
+          cd "$PROJECT_DIR"
+
           echo "Checking Flutter project..."
 
-          if [ ! -f "./pubspec.yaml" ]; then
-            echo "ERROR: pubspec.yaml is missing"
+          test -f pubspec.yaml
+          test -d android
+
+          if [ -f "android/settings.gradle" ]; then
+            echo "android/settings.gradle found."
+          elif [ -f "android/settings.gradle.kts" ]; then
+            echo "android/settings.gradle.kts found."
+          else
+            echo "ERROR: Android Gradle settings file is missing."
             exit 1
           fi
 
-          if [ ! -d "./lib" ]; then
-            echo "ERROR: lib directory is missing"
-            exit 1
-          fi
+          echo ""
+          echo "Flutter project verification successful."
 
-          if [ ! -d "./android" ]; then
-            echo "ERROR: android directory is missing"
-            exit 1
-          fi
-
-          echo "Flutter project structure is OK."
-
-          echo "pubspec.yaml:"
-          head -40 pubspec.yaml
-
+      # 8. Get dependencies
       - name: Get Flutter dependencies
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           flutter pub get
 
+      # 9. Analyze project
       - name: Analyze Flutter project
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           flutter analyze
 
+      # 10. Build Release APK
       - name: Build release APK
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "Building release APK..."
+
           flutter build apk --release
 
+          echo ""
+          echo "APK build completed."
+
+          ls -lh build/app/outputs/flutter-apk/
+
+      # 11. Verify APK exists
       - name: Verify APK
         shell: bash
         run: |
           set -e
 
+          cd "$PROJECT_DIR"
+
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created."
+            echo "ERROR: APK was not found."
             exit 1
           fi
 
           echo "APK successfully created:"
           ls -lh "$APK"
 
+      # 12. Upload APK to GitHub Actions Artifacts
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nexo-ai-video-maker-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: nexo-ai-video-maker-apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error

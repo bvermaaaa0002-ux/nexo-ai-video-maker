@@ -5,7 +5,7 @@ publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.9.0 <4.0.0"
+  sdk: ">=3.10.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -13,16 +13,15 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   path_provider: ^2.1.6
-  flutter_tts: ^4.2.3
-  ffmpeg_kit_flutter_new: ^4.5.3
+  ffmpeg_kit_flutter_new: 4.5.3
   video_player: ^2.10.1
   share_plus: ^13.3.0
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true

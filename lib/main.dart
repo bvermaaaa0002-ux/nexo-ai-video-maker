@@ -62,10 +62,12 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-
     _setupTts();
-    _setTestScript();
   }
+
+  // -----------------------------
+  // TTS SETUP
+  // -----------------------------
 
   Future<void> _setupTts() async {
     try {
@@ -73,29 +75,16 @@ class _HomePageState extends State<HomePage> {
       await _tts.setSpeechRate(0.45);
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
+
+      await _tts.awaitSynthCompletion(true);
     } catch (e) {
       debugPrint('TTS setup error: $e');
     }
   }
 
-  void _setTestScript() {
-    _scriptController.text = '''
-नमस्ते! यह NEXO AI का पहला वीडियो टेस्ट है।
-
-आज हम एक ऐसी कहानी की शुरुआत कर रहे हैं,
-जिसे शायद आप कभी भूल नहीं पाएंगे।
-
-बारिश का मौसम था और स्कूल की घंटी बज चुकी थी।
-
-लेकिन उस दिन स्कूल के पुराने कमरे में
-एक ऐसी चीज मिली,
-जिसने पूरी कहानी बदल दी।
-
-क्या आपको भी अपना School Wala Pyar याद है?
-
-अगर हाँ, तो उस इंसान को एक बार जरूर याद कीजिए।
-''';
-  }
+  // -----------------------------
+  // VIDEO DIRECTORY
+  // -----------------------------
 
   Future<Directory> _getVideoDirectory() async {
     final appDirectory =
@@ -112,144 +101,210 @@ class _HomePageState extends State<HomePage> {
     return videoDirectory;
   }
 
-  Future<String?> _createHindiVoice(String text) async {
-    try {
-      final directory = await _getVideoDirectory();
+  // -----------------------------
+  // CREATE HINDI VOICE
+  // -----------------------------
 
-      final timestamp =
-          DateTime.now().millisecondsSinceEpoch;
+  Future<String> _createHindiVoice(
+    String text,
+  ) async {
+    final directory =
+        await _getVideoDirectory();
 
-      final voiceFile = File(
-        '${directory.path}/nexo_voice_$timestamp.wav',
+    final timestamp =
+        DateTime.now().millisecondsSinceEpoch;
+
+    final voicePath =
+        '${directory.path}/nexo_voice_$timestamp.wav';
+
+    final voiceFile = File(voicePath);
+
+    if (await voiceFile.exists()) {
+      await voiceFile.delete();
+    }
+
+    await _setupTts();
+
+    debugPrint(
+      'Starting Hindi TTS...',
+    );
+
+    final result = await _tts.synthesizeToFile(
+      text,
+      voicePath,
+      true,
+    );
+
+    debugPrint(
+      'TTS result: $result',
+    );
+
+    // Wait for Android TTS to finish writing.
+    for (int i = 0; i < 60; i++) {
+      await Future.delayed(
+        const Duration(milliseconds: 500),
       );
 
-      await _setupTts();
+      if (await voiceFile.exists()) {
+        final size =
+            await voiceFile.length();
 
-      final result = await _tts.synthesizeToFile(
-        text,
-        voiceFile.path,
-        true,
-      );
-
-      debugPrint('TTS result: $result');
-
-      for (int i = 0; i < 40; i++) {
-        await Future.delayed(
-          const Duration(milliseconds: 500),
+        debugPrint(
+          'Voice file size: $size bytes',
         );
 
-        if (await voiceFile.exists()) {
-          final fileSize = await voiceFile.length();
-
-          if (fileSize > 1000) {
-            return voiceFile.path;
-          }
+        if (size > 10000) {
+          return voicePath;
         }
       }
-
-      return null;
-    } catch (e) {
-      debugPrint('Hindi voice error: $e');
-      return null;
     }
+
+    throw Exception(
+      'Hindi voice file तैयार नहीं हुई।',
+    );
   }
 
-  String _ffmpegQuote(String path) {
+  // -----------------------------
+  // SAFE FFmpeg PATH
+  // -----------------------------
+
+  String _quotePath(String path) {
     final escaped =
         path.replaceAll("'", "'\\''");
 
     return "'$escaped'";
   }
 
-  Future<String?> _createVideoFromVoice(
+  // -----------------------------
+  // CREATE MP4
+  // -----------------------------
+
+  Future<String> _createVideoFromVoice(
     String voicePath,
   ) async {
-    try {
-      final directory = await _getVideoDirectory();
+    final directory =
+        await _getVideoDirectory();
 
-      final timestamp =
-          DateTime.now().millisecondsSinceEpoch;
+    final timestamp =
+        DateTime.now().millisecondsSinceEpoch;
 
-      final outputPath =
-          '${directory.path}/NEXO_AI_$timestamp.mp4';
+    final outputPath =
+        '${directory.path}/NEXO_AI_$timestamp.mp4';
 
-      final audioInput =
-          _ffmpegQuote(voicePath);
+    final audioInput =
+        _quotePath(voicePath);
 
-      final videoOutput =
-          _ffmpegQuote(outputPath);
+    final videoOutput =
+        _quotePath(outputPath);
 
-      final command = [
-        '-f',
-        'lavfi',
-        '-i',
-        'color=c=0x101827:s=1280x720:r=30',
-        '-i',
-        audioInput,
-        '-map',
-        '0:v:0',
-        '-map',
-        '1:a:0',
-        '-c:v',
-        'mpeg4',
-        '-q:v',
-        '5',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k',
-        '-shortest',
-        '-movflags',
-        '+faststart',
-        videoOutput,
-      ].join(' ');
+    final command = [
+      '-y',
+      '-hide_banner',
+      '-loglevel',
+      'error',
 
-      debugPrint('FFmpeg command: $command');
+      // Background video
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=0x101827:s=1280x720:r=30',
 
-      final session =
-          await FFmpegKit.execute(command);
+      // Hindi audio
+      '-i',
+      audioInput,
 
-      final returnCode =
-          await session.getReturnCode();
+      // Mapping
+      '-map',
+      '0:v:0',
+      '-map',
+      '1:a:0',
 
-      debugPrint(
-        'FFmpeg return code: $returnCode',
-      );
+      // Video
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-tune',
+      'stillimage',
+      '-pix_fmt',
+      'yuv420p',
 
-      if (ReturnCode.isSuccess(returnCode)) {
-        final videoFile = File(outputPath);
+      // Audio
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
 
-        if (await videoFile.exists()) {
-          final size = await videoFile.length();
+      // Stop video when audio ends
+      '-shortest',
 
-          debugPrint(
-            'Video size: $size bytes',
-          );
+      // Better MP4 compatibility
+      '-movflags',
+      '+faststart',
 
-          if (size > 10000) {
-            return outputPath;
-          }
+      videoOutput,
+    ].join(' ');
+
+    debugPrint(
+      'FFmpeg command:\n$command',
+    );
+
+    final session =
+        await FFmpegKit.execute(command);
+
+    final returnCode =
+        await session.getReturnCode();
+
+    final output =
+        await session.getOutput();
+
+    final logs =
+        await session.getLogs();
+
+    debugPrint(
+      'FFmpeg return code: $returnCode',
+    );
+
+    debugPrint(
+      'FFmpeg output: $output',
+    );
+
+    debugPrint(
+      'FFmpeg logs: $logs',
+    );
+
+    if (ReturnCode.isSuccess(returnCode)) {
+      final videoFile =
+          File(outputPath);
+
+      if (await videoFile.exists()) {
+        final size =
+            await videoFile.length();
+
+        debugPrint(
+          'MP4 size: $size bytes',
+        );
+
+        if (size > 10000) {
+          return outputPath;
         }
       }
-
-      final output =
-          await session.getOutput();
-
-      debugPrint(
-        'FFmpeg output: $output',
-      );
-
-      return null;
-    } catch (e) {
-      debugPrint(
-        'Video creation error: $e',
-      );
-
-      return null;
     }
+
+    String error = output;
+
+    if (error.trim().isEmpty) {
+      error = logs.toString();
+    }
+
+    throw Exception(
+      'MP4 नहीं बन पाई.\n$error',
+    );
   }
+
+  // -----------------------------
+  // MAIN CREATE VIDEO
+  // -----------------------------
 
   Future<void> _createVideo() async {
     if (_working) {
@@ -261,14 +316,14 @@ class _HomePageState extends State<HomePage> {
 
     if (script.isEmpty) {
       _showMessage(
-        'पहले अपनी script लिखें।',
+        'पहले अपनी Script लिखें।',
       );
       return;
     }
 
     if (script.length < 10) {
       _showMessage(
-        'कृपया थोड़ी बड़ी script लिखें।',
+        'कृपया कम से कम कुछ शब्दों की Script लिखें।',
       );
       return;
     }
@@ -277,46 +332,38 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _working = true;
         _progress = 0.05;
-        _status = 'Script तैयार की जा रही है...';
+        _status =
+            'Script तैयार की जा रही है...';
         _videoPath = null;
       });
 
-      // STEP 1: Hindi voice
+      // STEP 1
       setState(() {
         _progress = 0.15;
-        _status = 'Hindi voice बनाई जा रही है...';
+        _status =
+            'Hindi Voice बनाई जा रही है...';
       });
 
       final voicePath =
           await _createHindiVoice(script);
 
-      if (voicePath == null) {
-        throw Exception(
-          'Hindi voice file नहीं बन पाई।',
-        );
-      }
-
-      // STEP 2: Video
+      // STEP 2
       setState(() {
-        _progress = 0.45;
+        _progress = 0.50;
         _status =
-            'Voice तैयार है। Video बनाया जा रहा है...';
+            'MP4 Video बनाई जा रही है...';
       });
 
       final videoPath =
-          await _createVideoFromVoice(voicePath);
+          await _createVideoFromVoice(
+        voicePath,
+      );
 
-      if (videoPath == null) {
-        throw Exception(
-          'MP4 video file नहीं बन पाई।',
-        );
-      }
-
-      // STEP 3: Preview
+      // STEP 3
       setState(() {
         _progress = 0.85;
         _status =
-            'Video preview तैयार किया जा रहा है...';
+            'Video Preview तैयार हो रहा है...';
       });
 
       await _openVideo(videoPath);
@@ -328,7 +375,8 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _videoPath = videoPath;
         _progress = 1.0;
-        _status = 'Video Successfully Created!';
+        _status =
+            'Video Successfully Created!';
       });
 
       _showMessage(
@@ -336,17 +384,29 @@ class _HomePageState extends State<HomePage> {
       );
     } catch (e) {
       debugPrint(
-        'Create video error: $e',
+        'VIDEO ERROR:\n$e',
       );
 
       if (mounted) {
         setState(() {
-          _status = 'Video generation failed';
+          _status =
+              'Video generation failed';
         });
 
-        _showMessage(
-          'Video Error: $e',
+        String message =
+            e.toString();
+
+        message = message.replaceFirst(
+          'Exception: ',
+          '',
         );
+
+        if (message.length > 600) {
+          message =
+              message.substring(0, 600);
+        }
+
+        _showMessage(message);
       }
     } finally {
       if (mounted) {
@@ -357,7 +417,13 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _openVideo(String path) async {
+  // -----------------------------
+  // OPEN VIDEO
+  // -----------------------------
+
+  Future<void> _openVideo(
+    String path,
+  ) async {
     await _videoController?.dispose();
 
     final controller =
@@ -381,13 +447,17 @@ class _HomePageState extends State<HomePage> {
     await controller.play();
   }
 
+  // -----------------------------
+  // TEST HINDI VOICE
+  // -----------------------------
+
   Future<void> _testVoice() async {
     final text =
         _scriptController.text.trim();
 
     if (text.isEmpty) {
       _showMessage(
-        'पहले कोई script लिखें।',
+        'पहले Script लिखें।',
       );
       return;
     }
@@ -433,12 +503,16 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // -----------------------------
+  // SHARE VIDEO
+  // -----------------------------
+
   Future<void> _shareVideo() async {
     final path = _videoPath;
 
     if (path == null) {
       _showMessage(
-        'पहले video बनाएं।',
+        'पहले Video बनाएं।',
       );
       return;
     }
@@ -459,31 +533,52 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _showMessage(String message) {
+  // -----------------------------
+  // MESSAGE
+  // -----------------------------
+
+  void _showMessage(
+    String message,
+  ) {
     if (!mounted) {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
       SnackBar(
         content: Text(message),
-        behavior: SnackBarBehavior.floating,
+        behavior:
+            SnackBarBehavior.floating,
+        duration:
+            const Duration(seconds: 6),
       ),
     );
   }
 
+  // -----------------------------
+  // DISPOSE
+  // -----------------------------
+
   @override
   void dispose() {
     _tts.stop();
+
     _scriptController.dispose();
+
     _videoController?.dispose();
 
     super.dispose();
   }
 
+  // -----------------------------
+  // UI
+  // -----------------------------
+
   @override
   Widget build(BuildContext context) {
-    final controller = _videoController;
+    final controller =
+        _videoController;
 
     final hasVideo =
         controller != null &&
@@ -498,7 +593,8 @@ class _HomePageState extends State<HomePage> {
           children: [
             Icon(
               Icons.auto_awesome,
-              color: Color(0xFF8A4DFF),
+              color:
+                  Color(0xFF8A4DFF),
               size: 30,
             ),
             SizedBox(width: 10),
@@ -506,18 +602,23 @@ class _HomePageState extends State<HomePage> {
               'NEXO AI',
               style: TextStyle(
                 fontSize: 28,
-                fontWeight: FontWeight.bold,
+                fontWeight:
+                    FontWeight.bold,
               ),
             ),
           ],
         ),
       ),
+
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          padding:
+              const EdgeInsets.all(20),
+
           child: Column(
             crossAxisAlignment:
                 CrossAxisAlignment.stretch,
+
             children: [
               const SizedBox(height: 10),
 
@@ -525,14 +626,15 @@ class _HomePageState extends State<HomePage> {
                 'AI Script to Video',
                 style: TextStyle(
                   fontSize: 25,
-                  fontWeight: FontWeight.bold,
+                  fontWeight:
+                      FontWeight.bold,
                 ),
               ),
 
               const SizedBox(height: 8),
 
               const Text(
-                'अपनी कहानी लिखें और NEXO AI से Hindi voice वाला video बनाएं।',
+                'अपनी कहानी या Script लिखें और Hindi Voice के साथ Video बनाएं।',
                 style: TextStyle(
                   color: Colors.white70,
                   fontSize: 15,
@@ -541,33 +643,52 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 20),
 
+              // SCRIPT BOX
               Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF101720),
+                decoration:
+                    BoxDecoration(
+                  color:
+                      const Color(0xFF101720),
                   borderRadius:
-                      BorderRadius.circular(20),
+                      BorderRadius.circular(
+                    20,
+                  ),
                   border: Border.all(
-                    color: Colors.white24,
+                    color:
+                        Colors.white24,
                   ),
                 ),
+
                 padding:
-                    const EdgeInsets.all(16),
+                    const EdgeInsets.all(
+                  16,
+                ),
+
                 child: TextField(
                   controller:
                       _scriptController,
+
                   maxLines: 18,
-                  style: const TextStyle(
+
+                  style:
+                      const TextStyle(
                     color: Colors.white,
                     fontSize: 17,
                     height: 1.5,
                   ),
+
                   decoration:
                       const InputDecoration(
-                    border: InputBorder.none,
+                    border:
+                        InputBorder.none,
+
                     hintText:
-                        'अपनी script यहाँ लिखें...',
-                    hintStyle: TextStyle(
-                      color: Colors.white38,
+                        'अपनी Script यहाँ लिखें...',
+
+                    hintStyle:
+                        TextStyle(
+                      color:
+                          Colors.white38,
                     ),
                   ),
                 ),
@@ -575,104 +696,150 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 20),
 
+              // PROGRESS
               if (_working) ...[
                 Text(
                   _status,
-                  style: const TextStyle(
-                    color: Colors.white70,
+                  style:
+                      const TextStyle(
+                    color:
+                        Colors.white70,
                     fontSize: 15,
                   ),
                 ),
 
-                const SizedBox(height: 10),
+                const SizedBox(
+                  height: 10,
+                ),
 
                 LinearProgressIndicator(
                   value: _progress,
                   minHeight: 8,
                   borderRadius:
-                      BorderRadius.circular(10),
+                      BorderRadius.circular(
+                    10,
+                  ),
                 ),
 
-                const SizedBox(height: 8),
+                const SizedBox(
+                  height: 8,
+                ),
 
                 Text(
                   '${(_progress * 100).toInt()}%',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  textAlign:
+                      TextAlign.center,
+                  style:
+                      const TextStyle(
                     fontWeight:
                         FontWeight.bold,
                   ),
                 ),
 
-                const SizedBox(height: 18),
+                const SizedBox(
+                  height: 18,
+                ),
               ],
 
+              // TEST VOICE
               OutlinedButton.icon(
                 onPressed:
-                    _working ? null : _testVoice,
+                    _working
+                        ? null
+                        : _testVoice,
+
                 icon: Icon(
                   _speaking
                       ? Icons.stop
                       : Icons.volume_up,
                 ),
+
                 label: Text(
                   _speaking
                       ? 'Stop Hindi Voice'
                       : 'Test Hindi Voice',
-                  style: const TextStyle(
+
+                  style:
+                      const TextStyle(
                     fontSize: 17,
                     fontWeight:
                         FontWeight.bold,
                   ),
                 ),
+
                 style:
                     OutlinedButton.styleFrom(
                   minimumSize:
-                      const Size.fromHeight(60),
+                      const Size
+                          .fromHeight(
+                    60,
+                  ),
+
                   shape:
                       RoundedRectangleBorder(
                     borderRadius:
-                        BorderRadius.circular(35),
+                        BorderRadius.circular(
+                      35,
+                    ),
                   ),
                 ),
               ),
 
               const SizedBox(height: 16),
 
+              // CREATE VIDEO
               ElevatedButton.icon(
                 onPressed:
-                    _working ? null : _createVideo,
+                    _working
+                        ? null
+                        : _createVideo,
+
                 icon: const Icon(
                   Icons.movie_creation,
                 ),
+
                 label: Text(
                   _working
                       ? 'Creating Video...'
                       : 'Create Video',
-                  style: const TextStyle(
+
+                  style:
+                      const TextStyle(
                     fontSize: 20,
                     fontWeight:
                         FontWeight.bold,
                   ),
                 ),
+
                 style:
                     ElevatedButton.styleFrom(
                   backgroundColor:
-                      const Color(0xFF7C4DFF),
+                      const Color(
+                    0xFF7C4DFF,
+                  ),
+
                   foregroundColor:
                       Colors.white,
+
                   minimumSize:
-                      const Size.fromHeight(70),
+                      const Size
+                          .fromHeight(
+                    70,
+                  ),
+
                   shape:
                       RoundedRectangleBorder(
                     borderRadius:
-                        BorderRadius.circular(25),
+                        BorderRadius.circular(
+                      25,
+                    ),
                   ),
                 ),
               ),
 
               const SizedBox(height: 25),
 
+              // VIDEO PREVIEW
               if (hasVideo) ...[
                 const Text(
                   'Video Preview',
@@ -683,38 +850,53 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
 
-                const SizedBox(height: 12),
+                const SizedBox(
+                  height: 12,
+                ),
 
                 ClipRRect(
                   borderRadius:
-                      BorderRadius.circular(18),
+                      BorderRadius.circular(
+                    18,
+                  ),
+
                   child: AspectRatio(
                     aspectRatio:
-                        controller.value.aspectRatio,
-                    child: VideoPlayer(
+                        controller
+                            .value
+                            .aspectRatio,
+
+                    child:
+                        VideoPlayer(
                       controller,
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 12),
+                const SizedBox(
+                  height: 12,
+                ),
 
                 Row(
                   children: [
                     Expanded(
                       child:
-                          OutlinedButton.icon(
+                          OutlinedButton
+                              .icon(
                         onPressed: () {
                           if (controller
                               .value
                               .isPlaying) {
-                            controller.pause();
+                            controller
+                                .pause();
                           } else {
-                            controller.play();
+                            controller
+                                .play();
                           }
 
                           setState(() {});
                         },
+
                         icon: Icon(
                           controller
                                   .value
@@ -722,43 +904,25 @@ class _HomePageState extends State<HomePage> {
                               ? Icons.pause
                               : Icons.play_arrow,
                         ),
-                        label: const Text(
+
+                        label:
+                            const Text(
                           'Play / Pause',
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+
+                    const SizedBox(
+                      width: 10,
+                    ),
+
                     Expanded(
                       child:
-                          ElevatedButton.icon(
+                          ElevatedButton
+                              .icon(
                         onPressed:
                             _shareVideo,
-                        icon: const Icon(
-                          Icons.share,
-                        ),
-                        label: const Text(
-                          'Share',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
 
-              const SizedBox(height: 30),
-
-              if (_videoPath != null)
-                const Text(
-                  'Video saved in NEXO_AI_Videos',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white54,
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+                        icon:
+                            const Icon(
+    

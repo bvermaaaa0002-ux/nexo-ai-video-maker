@@ -58,7 +58,6 @@ class _HomePageState extends State<HomePage> {
   String _status = 'Ready';
 
   String? _videoPath;
-  String? _voicePath;
 
   @override
   void initState() {
@@ -99,17 +98,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<Directory> _getVideoDirectory() async {
-    final appDir = await getApplicationDocumentsDirectory();
+    final appDirectory =
+        await getApplicationDocumentsDirectory();
 
-    final videoDir = Directory(
-      '${appDir.path}/NEXO_AI_Videos',
+    final videoDirectory = Directory(
+      '${appDirectory.path}/NEXO_AI_Videos',
     );
 
-    if (!await videoDir.exists()) {
-      await videoDir.create(recursive: true);
+    if (!await videoDirectory.exists()) {
+      await videoDirectory.create(recursive: true);
     }
 
-    return videoDir;
+    return videoDirectory;
   }
 
   Future<String?> _createHindiVoice(String text) async {
@@ -133,15 +133,15 @@ class _HomePageState extends State<HomePage> {
 
       debugPrint('TTS result: $result');
 
-      for (int i = 0; i < 30; i++) {
+      for (int i = 0; i < 40; i++) {
         await Future.delayed(
           const Duration(milliseconds: 500),
         );
 
         if (await voiceFile.exists()) {
-          final size = await voiceFile.length();
+          final fileSize = await voiceFile.length();
 
-          if (size > 1000) {
+          if (fileSize > 1000) {
             return voiceFile.path;
           }
         }
@@ -149,13 +149,16 @@ class _HomePageState extends State<HomePage> {
 
       return null;
     } catch (e) {
-      debugPrint('Voice creation error: $e');
+      debugPrint('Hindi voice error: $e');
       return null;
     }
   }
 
-  String _quotePath(String path) {
-    return "'${path.replaceAll("'", "'\\''")}'";
+  String _ffmpegQuote(String path) {
+    final escaped =
+        path.replaceAll("'", "'\\''");
+
+    return "'$escaped'";
   }
 
   Future<String?> _createVideoFromVoice(
@@ -170,35 +173,43 @@ class _HomePageState extends State<HomePage> {
       final outputPath =
           '${directory.path}/NEXO_AI_$timestamp.mp4';
 
-      final inputAudio = _quotePath(voicePath);
-      final outputVideo = _quotePath(outputPath);
+      final audioInput =
+          _ffmpegQuote(voicePath);
 
-      final command = '''
--f lavfi
--i color=c=0x101827:s=1280x720:r=30
--i $inputAudio
--map 0:v:0
--map 1:a:0
--c:v mpeg4
--q:v 5
--pix_fmt yuv420p
--c:a aac
--b:a 128k
--shortest
--movflags +faststart
-$outputVideo
-''';
+      final videoOutput =
+          _ffmpegQuote(outputPath);
 
-      final cleanCommand =
-          command.replaceAll('\n', ' ');
+      final command = [
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=0x101827:s=1280x720:r=30',
+        '-i',
+        audioInput,
+        '-map',
+        '0:v:0',
+        '-map',
+        '1:a:0',
+        '-c:v',
+        'mpeg4',
+        '-q:v',
+        '5',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        '-shortest',
+        '-movflags',
+        '+faststart',
+        videoOutput,
+      ].join(' ');
 
-      debugPrint(
-        'FFmpeg command: $cleanCommand',
-      );
+      debugPrint('FFmpeg command: $command');
 
-      final session = await FFmpegKit.execute(
-        cleanCommand,
-      );
+      final session =
+          await FFmpegKit.execute(command);
 
       final returnCode =
           await session.getReturnCode();
@@ -208,10 +219,14 @@ $outputVideo
       );
 
       if (ReturnCode.isSuccess(returnCode)) {
-        final file = File(outputPath);
+        final videoFile = File(outputPath);
 
-        if (await file.exists()) {
-          final size = await file.length();
+        if (await videoFile.exists()) {
+          final size = await videoFile.length();
+
+          debugPrint(
+            'Video size: $size bytes',
+          );
 
           if (size > 10000) {
             return outputPath;
@@ -219,10 +234,11 @@ $outputVideo
         }
       }
 
-      final logs = await session.getOutput();
+      final output =
+          await session.getOutput();
 
       debugPrint(
-        'FFmpeg output: $logs',
+        'FFmpeg output: $output',
       );
 
       return null;
@@ -236,7 +252,9 @@ $outputVideo
   }
 
   Future<void> _createVideo() async {
-    if (_working) return;
+    if (_working) {
+      return;
+    }
 
     final script =
         _scriptController.text.trim();
@@ -250,7 +268,7 @@ $outputVideo
 
     if (script.length < 10) {
       _showMessage(
-        'Script थोड़ी बड़ी लिखें।',
+        'कृपया थोड़ी बड़ी script लिखें।',
       );
       return;
     }
@@ -263,10 +281,10 @@ $outputVideo
         _videoPath = null;
       });
 
-      // STEP 1
+      // STEP 1: Hindi voice
       setState(() {
         _progress = 0.15;
-        _status = 'Hindi AI Voice बनाई जा रही है...';
+        _status = 'Hindi voice बनाई जा रही है...';
       });
 
       final voicePath =
@@ -278,12 +296,11 @@ $outputVideo
         );
       }
 
-      _voicePath = voicePath;
-
-      // STEP 2
+      // STEP 2: Video
       setState(() {
         _progress = 0.45;
-        _status = 'Voice तैयार है। Video बनाया जा रहा है...';
+        _status =
+            'Voice तैयार है। Video बनाया जा रहा है...';
       });
 
       final videoPath =
@@ -291,21 +308,25 @@ $outputVideo
 
       if (videoPath == null) {
         throw Exception(
-          'Video file नहीं बन पाई।',
+          'MP4 video file नहीं बन पाई।',
         );
       }
 
-      _videoPath = videoPath;
-
-      // STEP 3
+      // STEP 3: Preview
       setState(() {
         _progress = 0.85;
-        _status = 'Video तैयार किया जा रहा है...';
+        _status =
+            'Video preview तैयार किया जा रहा है...';
       });
 
       await _openVideo(videoPath);
 
+      if (!mounted) {
+        return;
+      }
+
       setState(() {
+        _videoPath = videoPath;
         _progress = 1.0;
         _status = 'Video Successfully Created!';
       });
@@ -314,13 +335,19 @@ $outputVideo
         '🎬 NEXO AI Video तैयार है!',
       );
     } catch (e) {
-      setState(() {
-        _status = 'Video generation failed';
-      });
-
-      _showMessage(
-        'Error: $e',
+      debugPrint(
+        'Create video error: $e',
       );
+
+      if (mounted) {
+        setState(() {
+          _status = 'Video generation failed';
+        });
+
+        _showMessage(
+          'Video Error: $e',
+        );
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -341,6 +368,11 @@ $outputVideo
     await controller.initialize();
 
     await controller.setLooping(true);
+
+    if (!mounted) {
+      await controller.dispose();
+      return;
+    }
 
     setState(() {
       _videoController = controller;
@@ -364,18 +396,22 @@ $outputVideo
       if (_speaking) {
         await _tts.stop();
 
-        setState(() {
-          _speaking = false;
-        });
+        if (mounted) {
+          setState(() {
+            _speaking = false;
+          });
+        }
 
         return;
       }
 
       await _setupTts();
 
-      setState(() {
-        _speaking = true;
-      });
+      if (mounted) {
+        setState(() {
+          _speaking = true;
+        });
+      }
 
       await _tts.speak(text);
 
@@ -385,9 +421,11 @@ $outputVideo
         });
       }
     } catch (e) {
-      setState(() {
-        _speaking = false;
-      });
+      if (mounted) {
+        setState(() {
+          _speaking = false;
+        });
+      }
 
       _showMessage(
         'Voice error: $e',
@@ -396,7 +434,9 @@ $outputVideo
   }
 
   Future<void> _shareVideo() async {
-    if (_videoPath == null) {
+    final path = _videoPath;
+
+    if (path == null) {
       _showMessage(
         'पहले video बनाएं।',
       );
@@ -408,7 +448,7 @@ $outputVideo
         ShareParams(
           text: 'NEXO AI Video',
           files: [
-            XFile(_videoPath!),
+            XFile(path),
           ],
         ),
       );
@@ -420,7 +460,9 @@ $outputVideo
   }
 
   void _showMessage(String message) {
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -442,6 +484,10 @@ $outputVideo
   @override
   Widget build(BuildContext context) {
     final controller = _videoController;
+
+    final hasVideo =
+        controller != null &&
+        controller.value.isInitialized;
 
     return Scaffold(
       appBar: AppBar(
@@ -627,8 +673,7 @@ $outputVideo
 
               const SizedBox(height: 25),
 
-              if (controller != null &&
-                  controller.value.isInitialized) ...[
+              if (hasVideo) ...[
                 const Text(
                   'Video Preview',
                   style: TextStyle(
@@ -645,9 +690,7 @@ $outputVideo
                       BorderRadius.circular(18),
                   child: AspectRatio(
                     aspectRatio:
-                        controller
-                            .value
-                            .aspectRatio,
+                        controller.value.aspectRatio,
                     child: VideoPlayer(
                       controller,
                     ),
@@ -705,10 +748,10 @@ $outputVideo
               const SizedBox(height: 30),
 
               if (_videoPath != null)
-                Text(
-                  'Saved inside NEXO_AI_Videos',
+                const Text(
+                  'Video saved in NEXO_AI_Videos',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white54,
                   ),
                 ),
